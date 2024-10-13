@@ -67,6 +67,7 @@ pub fn build(b: *Build) void {
     const c_header_path = switch (lang) {
         .luajit => b.path("include/luajit_all.h"),
         .luau => b.path("include/luau_all.h"),
+        .skynetlua => b.path("include/skynetlua_all.h"),
         else => b.path("include/lua_all.h"),
     };
     const c_headers = b.addTranslateC(.{

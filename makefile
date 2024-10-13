@@ -6,6 +6,7 @@ test:
 	zig build test --summary failures -Dlang=lua53
 	zig build test --summary failures -Dlang=lua54
 	zig build test --summary failures -Dlang=luau
+	zig build test --summary failures -Dlang=skynetlua
 
 	zig build install-example-interpreter
 	zig build install-example-zig-function

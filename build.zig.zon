@@ -37,5 +37,9 @@
             .url = "https://github.com/luau-lang/luau/archive/refs/tags/0.607.tar.gz",
             .hash = "122003818ff2aa912db37d4bbda314ff9ff70d03d9243af4b639490be98e2bfa7cb6",
         },
+        .skynetlua = .{
+            .url = "https://github.com/cloudfreexiao/skynetlua/commit/26547325a4904632a8c84e39be6c3d7bde5cc5f2",
+            .hash = "122003818ff2aa912db37d4bbda314ff9ff70d03d9243af4b639490be98e2bfa7c80",
+        },
     },
 }

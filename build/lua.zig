@@ -10,6 +10,7 @@ pub const Language = enum {
     lua54,
     luajit,
     luau,
+    skynetlua,
 };
 
 pub fn configure(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, upstream: *Build.Dependency, lang: Language, shared: bool) *Step.Compile {
@@ -22,6 +23,7 @@ pub fn configure(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.
             .lua52 => std.SemanticVersion{ .major = 5, .minor = 2, .patch = 4 },
             .lua53 => std.SemanticVersion{ .major = 5, .minor = 3, .patch = 6 },
             .lua54 => std.SemanticVersion{ .major = 5, .minor = 4, .patch = 6 },
+            .skynetlua => std.SemanticVersion{ .major = 5, .minor = 4, .patch = 7 },
             else => unreachable,
         },
     };
@@ -53,6 +55,7 @@ pub fn configure(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.
         .lua52 => &lua_52_source_files,
         .lua53 => &lua_53_source_files,
         .lua54 => &lua_54_source_files,
+        .skynetlua => &skynet_lua_source_files,
         else => unreachable,
     };
 
@@ -124,4 +127,8 @@ const lua_54_source_files = lua_base_source_files ++ [_][]const u8{
     "src/lctype.c",
     "src/lcorolib.c",
     "src/lutf8lib.c",
+};
+
+const skynet_lua_source_files = [_][]const u8{
+    "src/skynetlua.c",
 };
