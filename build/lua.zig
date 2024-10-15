@@ -22,7 +22,7 @@ pub fn configure(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.
             .lua51 => std.SemanticVersion{ .major = 5, .minor = 1, .patch = 5 },
             .lua52 => std.SemanticVersion{ .major = 5, .minor = 2, .patch = 4 },
             .lua53 => std.SemanticVersion{ .major = 5, .minor = 3, .patch = 6 },
-            .lua54 => std.SemanticVersion{ .major = 5, .minor = 4, .patch = 6 },
+            .lua54 => std.SemanticVersion{ .major = 5, .minor = 4, .patch = 7 },
             .skynetlua => std.SemanticVersion{ .major = 5, .minor = 4, .patch = 7 },
             else => unreachable,
         },
@@ -70,10 +70,14 @@ pub fn configure(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.
 
     lib.linkLibC();
 
-    lib.installHeader(upstream.path("src/lua.h"), "lua.h");
-    lib.installHeader(upstream.path("src/lualib.h"), "lualib.h");
-    lib.installHeader(upstream.path("src/lauxlib.h"), "lauxlib.h");
-    lib.installHeader(upstream.path("src/luaconf.h"), "luaconf.h");
+    if (lang != .skynetlua) {
+        lib.installHeader(upstream.path("src/lua.h"), "lua.h");
+        lib.installHeader(upstream.path("src/lualib.h"), "lualib.h");
+        lib.installHeader(upstream.path("src/lauxlib.h"), "lauxlib.h");
+        lib.installHeader(upstream.path("src/luaconf.h"), "luaconf.h");
+    } else {
+        lib.installHeader(upstream.path("src/skynetlua.h"), "skynetlua.h");
+    }
 
     return lib;
 }

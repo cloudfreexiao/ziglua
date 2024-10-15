@@ -123,7 +123,7 @@ test "number conversion success and failure" {
 }
 
 test "arithmetic (lua_arith)" {
-    if (!langIn(.{ .lua52, .lua53, .lua54 })) return;
+    if (!langIn(.{ .lua52, .lua53, .lua54, .skynetlua })) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -196,7 +196,7 @@ test "compare" {
     lua.pushNumber(1);
     lua.pushNumber(2);
 
-    if (langIn(.{ .lua52, .lua53, .lua54 })) {
+    if (langIn(.{ .lua52, .lua53, .lua54, .skynetlua })) {
         try expect(!lua.compare(-2, -1, .eq));
         try expect(!lua.compare(-1, -2, .le));
         try expect(!lua.compare(-1, -2, .lt));
@@ -374,7 +374,7 @@ test "stack manipulation" {
     defer lua.deinit();
 
     // TODO: combine these more
-    if (ziglua.lang == .lua53 or ziglua.lang == .lua54) {
+    if (ziglua.lang == .lua53 or ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         var num: i32 = 1;
         while (num <= 10) : (num += 1) {
             lua.pushInteger(num);
@@ -483,7 +483,7 @@ test "version" {
     switch (ziglua.lang) {
         .lua52 => try expectEqual(502, lua.version(false).*),
         .lua53 => try expectEqual(503, lua.version(false).*),
-        .lua54 => try expectEqual(504, lua.version()),
+        .lua54, .skynetlua => try expectEqual(504, lua.version()),
         else => unreachable,
     }
 
@@ -542,7 +542,7 @@ test "string buffers" {
     @memcpy(b[0..20], "a" ** 20);
     buffer.pushResultSize(20);
 
-    if (ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua54 and ziglua.lang != .skynetlua) return;
     try expectEqual(20, buffer.len());
     buffer.sub(10);
     try expectEqual(10, buffer.len());
@@ -674,7 +674,7 @@ test "panic fn" {
 }
 
 test "warn fn" {
-    if (ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua54 and ziglua.lang != .skynetlua) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -702,7 +702,7 @@ test "concat" {
     _ = lua.pushStringZ(" wow!");
     lua.concat(3);
 
-    if (ziglua.lang == .lua53 or ziglua.lang == .lua54) {
+    if (ziglua.lang == .lua53 or ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         try expectEqualStrings("hello 10.0 wow!", try lua.toString(-1));
     } else {
         try expectEqualStrings("hello 10 wow!", try lua.toString(-1));
@@ -722,7 +722,7 @@ test "garbage collector" {
     _ = lua.gcCountB();
 
     if (ziglua.lang != .lua51 and ziglua.lang != .luajit) _ = lua.gcIsRunning();
-    if (ziglua.lang != .lua54) lua.gcStep();
+    if (ziglua.lang != .lua54 and ziglua.lang != .skynetlua) lua.gcStep();
 
     if (langIn(.{ .lua51, .lua52, .lua53 })) {
         _ = lua.gcSetPause(2);
@@ -732,7 +732,7 @@ test "garbage collector" {
     if (ziglua.lang == .lua52) {
         lua.gcSetGenerational();
         lua.gcSetGenerational();
-    } else if (ziglua.lang == .lua54) {
+    } else if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         lua.gcStep(10);
         try expect(lua.gcSetGenerational(0, 10));
         try expect(lua.gcSetIncremental(0, 0, 0));
@@ -745,7 +745,7 @@ test "garbage collector" {
 }
 
 test "extra space" {
-    if (ziglua.lang != .lua53 and ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua53 and ziglua.lang != .lua54 and ziglua.lang != .skynetlua) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -764,13 +764,13 @@ test "table access" {
     try lua.doString("a = { [1] = 'first', key = 'value', ['other one'] = 1234 }");
     _ = try lua.getGlobal("a");
 
-    if (ziglua.lang == .lua53 or ziglua.lang == .lua54) {
+    if (ziglua.lang == .lua53 or ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         try expectEqual(.string, lua.rawGetIndex(1, 1));
         try expectEqualStrings("first", try lua.toString(-1));
     }
 
     try expectEqual(.string, switch (ziglua.lang) {
-        .lua53, .lua54 => lua.getIndex(1, 1),
+        .lua53, .lua54, .skynetlua => lua.getIndex(1, 1),
         else => lua.rawGetIndex(1, 1),
     });
     try expectEqualStrings("first", try lua.toString(-1));
@@ -818,7 +818,7 @@ test "table access" {
     var index: i32 = 1;
     while (index <= 5) : (index += 1) {
         lua.pushInteger(index);
-        if (ziglua.lang == .lua53 or ziglua.lang == .lua54) lua.setIndex(-2, index) else lua.rawSetIndex(-2, index);
+        if (ziglua.lang == .lua53 or ziglua.lang == .lua54 or ziglua.lang == .skynetlua) lua.setIndex(-2, index) else lua.rawSetIndex(-2, index);
     }
 
     if (!langIn(.{ .lua51, .luajit, .luau })) {
@@ -834,7 +834,7 @@ test "table access" {
 }
 
 test "conversions" {
-    if (ziglua.lang != .lua53 and ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua53 and ziglua.lang != .lua54 and ziglua.lang != .skynetlua) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -893,14 +893,14 @@ test "dump and load" {
     defer buffer.deinit();
 
     // save the function as a binary chunk in the buffer
-    if (ziglua.lang == .lua53 or ziglua.lang == .lua54) {
+    if (ziglua.lang == .lua53 or ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         try lua.dump(ziglua.wrap(writer), &buffer, false);
     } else {
         try lua.dump(ziglua.wrap(writer), &buffer);
     }
 
     // clear the stack
-    if (ziglua.lang == .lua54) {
+    if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         try lua.closeThread(lua);
     } else lua.setTop(0);
 
@@ -955,7 +955,7 @@ test "userdata and uservalues" {
     };
 
     // create a Lua-owned pointer to a Data with 2 associated user values
-    var data = if (ziglua.lang == .lua54) lua.newUserdata(Data, 2) else lua.newUserdata(Data);
+    var data = if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) lua.newUserdata(Data, 2) else lua.newUserdata(Data);
     data.val = 1;
     @memcpy(&data.code, "abcd");
 
@@ -969,7 +969,7 @@ test "userdata and uservalues" {
 
         _ = lua.getUserValue(1);
         try expectEqual(.nil, lua.typeOf(-1));
-    } else if (ziglua.lang == .lua54) {
+    } else if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         // assign the user values
         lua.pushNumber(1234.56);
         try lua.setUserValue(1, 1);
@@ -1065,7 +1065,7 @@ test "registry" {
 }
 
 test "closing vars" {
-    if (ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua54 or ziglua.lang != .skynetlua) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -1128,7 +1128,7 @@ fn continuation(l: *Lua, status: ziglua.Status, ctx: isize) i32 {
 }
 
 test "yielding" {
-    if (ziglua.lang != .lua53 and ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua53 and ziglua.lang != .lua54 and ziglua.lang != .skynetlua) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -1147,7 +1147,7 @@ test "yielding" {
     try expect(!lua.isYieldable());
 
     var i: i32 = 0;
-    if (ziglua.lang == .lua54) {
+    if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) {
         try expect(thread.isYieldable());
 
         var results: i32 = undefined;
@@ -1236,7 +1236,7 @@ test "yielding no continuation" {
 }
 
 test "resuming" {
-    if (ziglua.lang == .lua54) return;
+    if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -1338,7 +1338,7 @@ test "aux check functions" {
 
     lua.pushFunction(function);
     // test pushFail here (currently acts the same as pushNil)
-    if (ziglua.lang == .lua54) lua.pushFail() else lua.pushNil();
+    if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) lua.pushFail() else lua.pushNil();
     lua.pushInteger(3);
     lua.pushNumber(4);
     _ = lua.pushString("hello world");
@@ -1428,7 +1428,7 @@ test "checkOption" {
 }
 
 test "get global fail" {
-    if (ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua54 and ziglua.lang != .skynetlua) return;
 
     var lua = try Lua.init(testing.allocator);
     defer lua.deinit();
@@ -1579,7 +1579,7 @@ test "args and errors" {
     try expectError(error.LuaRuntime, lua.protectedCall(0, 0, 0));
     try expectEqualStrings("some error zig!", try lua.toString(-1));
 
-    if (ziglua.lang != .lua54) return;
+    if (ziglua.lang != .lua54 and ziglua.lang != .skynetlua) return;
 
     const argExpected = ziglua.wrap(struct {
         fn inner(l: *Lua) i32 {
@@ -1661,7 +1661,7 @@ test "userdata" {
     lua.pushFunction(checkUdata);
 
     {
-        var t = if (ziglua.lang == .lua54) lua.newUserdata(Type, 0) else lua.newUserdata(Type);
+        var t = if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) lua.newUserdata(Type, 0) else lua.newUserdata(Type);
         if (langIn(.{ .lua51, .luajit, .luau })) {
             _ = lua.getField(ziglua.registry_index, "Type");
             lua.setMetatable(-2);
@@ -1695,7 +1695,7 @@ test "userdata" {
     lua.pushFunction(testUdata);
 
     {
-        var t = if (ziglua.lang == .lua54) lua.newUserdata(Type, 0) else lua.newUserdata(Type);
+        var t = if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) lua.newUserdata(Type, 0) else lua.newUserdata(Type);
         lua.setMetatableRegistry("Type");
         t.a = 1234;
         t.b = 3.14;
@@ -1715,7 +1715,7 @@ test "userdata slices" {
     try lua.newMetatable("FixedArray");
 
     // create an array of 10
-    const slice = if (ziglua.lang == .lua54) lua.newUserdataSlice(Integer, 10, 0) else lua.newUserdataSlice(Integer, 10);
+    const slice = if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) lua.newUserdataSlice(Integer, 10, 0) else lua.newUserdataSlice(Integer, 10);
     if (langIn(.{ .lua51, .luajit, .luau })) {
         _ = lua.getField(ziglua.registry_index, "FixedArray");
         lua.setMetatable(-2);
@@ -1834,9 +1834,9 @@ test "debug interface" {
         fn inner(l: *Lua, event: ziglua.Event, i: *DebugInfo) !void {
             switch (event) {
                 .call => {
-                    if (ziglua.lang == .lua54) l.getInfo(.{ .l = true, .r = true }, i) else l.getInfo(.{ .l = true }, i);
+                    if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) l.getInfo(.{ .l = true, .r = true }, i) else l.getInfo(.{ .l = true }, i);
                     if (i.current_line.? != 2) std.debug.panic("Expected line to be 2", .{});
-                    _ = if (ziglua.lang == .lua54) try l.getLocal(i, i.first_transfer) else try l.getLocal(i, 1);
+                    _ = if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) try l.getLocal(i, i.first_transfer) else try l.getLocal(i, 1);
                     if ((try l.toNumber(-1)) != 3) std.debug.panic("Expected x to equal 3", .{});
                 },
                 .line => if (i.current_line.? == 4) {
@@ -1845,9 +1845,9 @@ test "debug interface" {
                     _ = try l.setLocal(i, 2);
                 },
                 .ret => {
-                    if (ziglua.lang == .lua54) l.getInfo(.{ .l = true, .r = true }, i) else l.getInfo(.{ .l = true }, i);
+                    if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) l.getInfo(.{ .l = true, .r = true }, i) else l.getInfo(.{ .l = true }, i);
                     if (i.current_line.? != 4) std.debug.panic("Expected line to be 4", .{});
-                    _ = if (ziglua.lang == .lua54) try l.getLocal(i, i.first_transfer) else try l.getLocal(i, 1);
+                    _ = if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) try l.getLocal(i, i.first_transfer) else try l.getLocal(i, 1);
                     if ((try l.toNumber(-1)) != 3) std.debug.panic("Expected result to equal 3", .{});
                 },
                 else => unreachable,
@@ -1986,7 +1986,7 @@ test "debug upvalues" {
     _ = try lua.setUpvalue(-2, 1);
 
     // test a bad index (the valid one's result is unpredicable)
-    if (ziglua.lang == .lua54) try expectError(error.LuaError, lua.upvalueId(-1, 2));
+    if (ziglua.lang == .lua54 or ziglua.lang == .skynetlua) try expectError(error.LuaError, lua.upvalueId(-1, 2));
 
     // call the new function (should return 7)
     lua.pushNumber(2);

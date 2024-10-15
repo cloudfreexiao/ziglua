@@ -70,7 +70,7 @@ const ArithOperator53 = enum(u4) {
 
 /// Operations supported by `Lua.arith()`
 pub const ArithOperator = switch (lang) {
-    .lua53, .lua54 => ArithOperator53,
+    .lua53, .lua54, .skynetlua => ArithOperator53,
     else => ArithOperator52,
 };
 
@@ -298,7 +298,7 @@ pub const DebugInfoLuau = struct {
 pub const DebugInfo = switch (lang) {
     .lua51, .luajit => DebugInfo51,
     .lua52, .lua53 => DebugInfo52,
-    .lua54 => DebugInfo54,
+    .lua54, .skynetlua => DebugInfo54,
     .luau => DebugInfoLuau,
 };
 
@@ -342,7 +342,7 @@ const Event52 = enum(u3) {
 
 pub const Event = switch (lang) {
     .lua51, .luajit => Event51,
-    .lua52, .lua53, .lua54 => Event52,
+    .lua52, .lua53, .lua54, .skynetlua => Event52,
     // TODO: probably something better than void here
     .luau => void,
 };
@@ -563,7 +563,7 @@ pub const Unsigned = c.lua_Unsigned;
 
 /// The type of warning functions used by Lua to emit warnings
 pub const CWarnFn = switch (lang) {
-    .lua54 => *const fn (data: ?*anyopaque, msg: [*c]const u8, to_cont: c_int) callconv(.C) void,
+    .lua54, .skynetlua => *const fn (data: ?*anyopaque, msg: [*c]const u8, to_cont: c_int) callconv(.C) void,
     else => @compileError("CWarnFn not defined"),
 };
 
@@ -779,7 +779,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_callk
     pub const callCont = switch (lang) {
         .lua52 => callCont52,
-        .lua53, .lua54 => callCont53,
+        .lua53, .lua54, .skynetlua => callCont53,
         else => @compileError("callCont() not defined"),
     };
 
@@ -941,7 +941,7 @@ pub const Lua = opaque {
     ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_dump
     pub const dump = switch (lang) {
-        .lua53, .lua54 => dump53,
+        .lua53, .lua54, .skynetlua => dump53,
         else => dump51,
     };
 
@@ -976,7 +976,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub fn gcCollect(lua: *Lua) void {
         _ = switch (lang) {
-            .lua54 => c.lua_gc(@ptrCast(lua), c.LUA_GCCOLLECT),
+            .lua54, .skynetlua => c.lua_gc(@ptrCast(lua), c.LUA_GCCOLLECT),
             else => c.lua_gc(@ptrCast(lua), c.LUA_GCCOLLECT, 0),
         };
     }
@@ -985,7 +985,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub fn gcStop(lua: *Lua) void {
         _ = switch (lang) {
-            .lua54 => c.lua_gc(@ptrCast(lua), c.LUA_GCSTOP),
+            .lua54, .skynetlua => c.lua_gc(@ptrCast(lua), c.LUA_GCSTOP),
             else => c.lua_gc(@ptrCast(lua), c.LUA_GCSTOP, 0),
         };
     }
@@ -994,7 +994,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub fn gcRestart(lua: *Lua) void {
         _ = switch (lang) {
-            .lua54 => c.lua_gc(@ptrCast(lua), c.LUA_GCRESTART),
+            .lua54, .skynetlua => c.lua_gc(@ptrCast(lua), c.LUA_GCRESTART),
             else => c.lua_gc(@ptrCast(lua), c.LUA_GCRESTART, 0),
         };
     }
@@ -1010,7 +1010,7 @@ pub const Lua = opaque {
     /// Performs an incremental step of garbage collection corresponding to the allocation of step_size Kbytes
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub const gcStep = switch (lang) {
-        .lua54 => gcStep54,
+        .lua54, .skynetlua => gcStep54,
         else => gcStep51,
     };
 
@@ -1018,7 +1018,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub fn gcCount(lua: *Lua) i32 {
         return switch (lang) {
-            .lua54 => c.lua_gc(@ptrCast(lua), c.LUA_GCCOUNT),
+            .lua54, .skynetlua => c.lua_gc(@ptrCast(lua), c.LUA_GCCOUNT),
             else => c.lua_gc(@ptrCast(lua), c.LUA_GCCOUNT, 0),
         };
     }
@@ -1027,7 +1027,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub fn gcCountB(lua: *Lua) i32 {
         return switch (lang) {
-            .lua54 => c.lua_gc(@ptrCast(lua), c.LUA_GCCOUNTB),
+            .lua54, .skynetlua => c.lua_gc(@ptrCast(lua), c.LUA_GCCOUNTB),
             else => c.lua_gc(@ptrCast(lua), c.LUA_GCCOUNTB, 0),
         };
     }
@@ -1036,7 +1036,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub fn gcIsRunning(lua: *Lua) bool {
         return switch (lang) {
-            .lua54 => c.lua_gc(@ptrCast(lua), c.LUA_GCISRUNNING) != 0,
+            .lua54, .skynetlua => c.lua_gc(@ptrCast(lua), c.LUA_GCISRUNNING) != 0,
             else => c.lua_gc(@ptrCast(lua), c.LUA_GCISRUNNING, 0) != 0,
         };
     }
@@ -1069,7 +1069,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
     pub const gcSetGenerational = switch (lang) {
         .lua52 => gcSetGenerational52,
-        .lua54 => gcSetGenerational54,
+        .lua54, .skynetlua => gcSetGenerational54,
         else => @compileError("gcSetGenerational() not available"),
     };
 
@@ -1158,7 +1158,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getfield
     pub fn getField(lua: *Lua, index: i32, key: [:0]const u8) LuaType {
         switch (lang) {
-            .lua53, .lua54, .luau => return @enumFromInt(c.lua_getfield(@ptrCast(lua), index, key.ptr)),
+            .lua53, .lua54, .luau, .skynetlua => return @enumFromInt(c.lua_getfield(@ptrCast(lua), index, key.ptr)),
             else => {
                 c.lua_getfield(@ptrCast(lua), index, key.ptr);
                 return lua.typeOf(-1);
@@ -1178,7 +1178,7 @@ pub const Lua = opaque {
     pub fn getGlobal(lua: *Lua, name: [:0]const u8) !LuaType {
         const lua_type: LuaType = blk: {
             switch (lang) {
-                .lua53, .lua54, .luau => break :blk @enumFromInt(c.lua_getglobal(@as(*LuaState, @ptrCast(lua)), name.ptr)),
+                .lua53, .lua54, .luau, .skynetlua => break :blk @enumFromInt(c.lua_getglobal(@as(*LuaState, @ptrCast(lua)), name.ptr)),
                 else => {
                     c.lua_getglobal(@as(*LuaState, @ptrCast(lua)), name.ptr);
                     break :blk lua.typeOf(-1);
@@ -1227,7 +1227,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getiuservalue
     pub const getUserValue = switch (lang) {
         .lua53 => getUserValue53,
-        .lua54 => getUserValue54,
+        .lua54, .skynetlua => getUserValue54,
         else => getUserValue52,
     };
 
@@ -1243,7 +1243,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gettable
     pub fn getTable(lua: *Lua, index: i32) LuaType {
         switch (lang) {
-            .lua53, .lua54, .luau => return @enumFromInt(c.lua_gettable(@ptrCast(lua), index)),
+            .lua53, .lua54, .luau, .skynetlua => return @enumFromInt(c.lua_gettable(@ptrCast(lua), index)),
             else => {
                 c.lua_gettable(@ptrCast(lua), index);
                 return lua.typeOf(-1);
@@ -1395,7 +1395,7 @@ pub const Lua = opaque {
         const ret = c.lua_load(@ptrCast(lua), reader, data, chunk_name.ptr, mode_str.ptr);
 
         return switch (lang) {
-            .lua54 => switch (ret) {
+            .lua54, .skynetlua => switch (ret) {
                 StatusCode.ok => {},
                 StatusCode.err_syntax => error.LuaSyntax,
                 StatusCode.err_memory => error.OutOfMemory,
@@ -1460,7 +1460,7 @@ pub const Lua = opaque {
     }
 
     pub const newUserdata = switch (lang) {
-        .lua54 => newUserdata54,
+        .lua54, .skynetlua => newUserdata54,
         else => newUserdata51,
     };
 
@@ -1483,7 +1483,7 @@ pub const Lua = opaque {
     }
 
     pub const newUserdataSlice = switch (lang) {
-        .lua54 => newUserdataSlice54,
+        .lua54, .skynetlua => newUserdataSlice54,
         else => newUserdataSlice51,
     };
 
@@ -1564,7 +1564,7 @@ pub const Lua = opaque {
         const ret = c.lua_pcallk(@ptrCast(lua), num_args, num_results, msg_handler, 0, null);
 
         return switch (lang) {
-            .lua54 => switch (ret) {
+            .lua54, .skynetlua => switch (ret) {
                 StatusCode.ok => return,
                 StatusCode.err_runtime => return error.LuaRuntime,
                 StatusCode.err_memory => return error.OutOfMemory,
@@ -1605,7 +1605,7 @@ pub const Lua = opaque {
         const ret = c.lua_pcallk(@ptrCast(lua), num_args, num_results, msg_handler, ctx, k);
 
         return switch (lang) {
-            .lua54 => switch (ret) {
+            .lua54, .skynetlua => switch (ret) {
                 StatusCode.ok => return,
                 StatusCode.err_runtime => return error.LuaRuntime,
                 StatusCode.err_memory => return error.OutOfMemory,
@@ -1627,7 +1627,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pcallk
     pub const protectedCallCont = switch (lang) {
         .lua52 => protectedCallCont52,
-        .lua53, .lua54 => protectedCallCont53,
+        .lua53, .lua54, .skynetlua => protectedCallCont53,
         else => @compileError("protectedCallCont() not implemented"),
     };
 
@@ -1789,7 +1789,7 @@ pub const Lua = opaque {
     /// TODO: should this be renamed to getTableRaw (seems more logical)?
     pub fn rawGetTable(lua: *Lua, index: i32) LuaType {
         switch (lang) {
-            .lua53, .lua54, .luau => return @enumFromInt(c.lua_rawget(@ptrCast(lua), index)),
+            .lua53, .lua54, .luau, .skynetlua => return @enumFromInt(c.lua_rawget(@ptrCast(lua), index)),
             else => {
                 c.lua_rawget(@ptrCast(lua), index);
                 return lua.typeOf(-1);
@@ -1807,7 +1807,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rawgeti
     pub fn rawGetIndex(lua: *Lua, index: i32, n: RawGetIndexNType) LuaType {
         switch (lang) {
-            .lua53, .lua54, .luau => return @enumFromInt(c.lua_rawgeti(@ptrCast(lua), index, n)),
+            .lua53, .lua54, .luau, .skynetlua => return @enumFromInt(c.lua_rawgeti(@ptrCast(lua), index, n)),
             else => {
                 c.lua_rawgeti(@ptrCast(lua), index, n);
                 return lua.typeOf(-1);
@@ -1820,7 +1820,7 @@ pub const Lua = opaque {
     /// rawgetp
     pub fn rawGetPtr(lua: *Lua, index: i32, p: *const anyopaque) LuaType {
         switch (lang) {
-            .lua53, .lua54 => return @enumFromInt(c.lua_rawgetp(@ptrCast(lua), index, p)),
+            .lua53, .lua54, .skynetlua => return @enumFromInt(c.lua_rawgetp(@ptrCast(lua), index, p)),
             else => {
                 c.lua_rawgetp(@ptrCast(lua), index, p);
                 return lua.typeOf(-1);
@@ -1949,7 +1949,7 @@ pub const Lua = opaque {
     pub const resumeThread = switch (lang) {
         .lua51, .luajit => resumeThread51,
         .lua52, .lua53 => resumeThread52,
-        .lua54 => resumeThread54,
+        .lua54, .skynetlua => resumeThread54,
         .luau => resumeThreadLuau,
     };
 
@@ -2005,7 +2005,7 @@ pub const Lua = opaque {
     }
 
     pub const setUserValue = switch (lang) {
-        .lua54 => setUserValue54,
+        .lua54, .skynetlua => setUserValue54,
         else => setUserValue52,
     };
 
@@ -2253,7 +2253,7 @@ pub const Lua = opaque {
     }
 
     pub const version = switch (lang) {
-        .lua54 => version54,
+        .lua54, .skynetlua => version54,
         else => version52,
     };
 
@@ -2300,7 +2300,7 @@ pub const Lua = opaque {
     /// This function never returns
     /// See https://www.lua.org/manual/5.4/manual.html#lua_yieldk
     pub const yieldCont = switch (lang) {
-        .lua53, .lua54 => yieldCont53,
+        .lua53, .lua54, .skynetlua => yieldCont53,
         else => yieldCont52,
     };
 
@@ -2356,7 +2356,7 @@ pub const Lua = opaque {
                 unreachable;
             };
         }
-        if (lang == .lua54 and options.r) {
+        if ((lang == .lua54 or lang == .skynetlua) and options.r) {
             info.first_transfer = ar.ftransfer;
             info.num_transfer = ar.ntransfer;
         }
@@ -2690,7 +2690,7 @@ pub const Lua = opaque {
     /// the same version of Lua and the same numeric types.
     /// See https://www.lua.org/manual/5.4/manual.html#luaL_checkversion
     pub const checkVersion = switch (lang) {
-        .lua53, .lua54 => checkVersion53,
+        .lua53, .lua54, .skynetlua => checkVersion53,
         else => checkVersion52,
     };
 
@@ -2761,7 +2761,7 @@ pub const Lua = opaque {
     /// See https://www.lua.org/manual/5.4/manual.html#luaL_getmetatable
     pub fn getMetatableRegistry(lua: *Lua, table_name: [:0]const u8) LuaType {
         switch (lang) {
-            .lua53, .lua54, .luau => return @enumFromInt(c.luaL_getmetatable(@as(*LuaState, @ptrCast(lua)), table_name.ptr)),
+            .lua53, .lua54, .luau, .skynetlua => return @enumFromInt(c.luaL_getmetatable(@as(*LuaState, @ptrCast(lua)), table_name.ptr)),
             else => {
                 c.luaL_getmetatable(@as(*LuaState, @ptrCast(lua)), table_name.ptr);
                 return lua.typeOf(-1);
