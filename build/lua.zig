@@ -55,7 +55,6 @@ pub fn configure(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.
         .lua52 => &lua_52_source_files,
         .lua53 => &lua_53_source_files,
         .lua54 => &lua_54_source_files,
-        .skynetlua => &skynet_lua_source_files,
         else => unreachable,
     };
 
@@ -70,14 +69,10 @@ pub fn configure(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.
 
     lib.linkLibC();
 
-    if (lang != .skynetlua) {
-        lib.installHeader(upstream.path("src/lua.h"), "lua.h");
-        lib.installHeader(upstream.path("src/lualib.h"), "lualib.h");
-        lib.installHeader(upstream.path("src/lauxlib.h"), "lauxlib.h");
-        lib.installHeader(upstream.path("src/luaconf.h"), "luaconf.h");
-    } else {
-        lib.installHeader(upstream.path("src/skynetlua.h"), "skynetlua.h");
-    }
+    lib.installHeader(upstream.path("src/lua.h"), "lua.h");
+    lib.installHeader(upstream.path("src/lualib.h"), "lualib.h");
+    lib.installHeader(upstream.path("src/lauxlib.h"), "lauxlib.h");
+    lib.installHeader(upstream.path("src/luaconf.h"), "luaconf.h");
 
     return lib;
 }
@@ -131,8 +126,4 @@ const lua_54_source_files = lua_base_source_files ++ [_][]const u8{
     "src/lctype.c",
     "src/lcorolib.c",
     "src/lutf8lib.c",
-};
-
-const skynet_lua_source_files = [_][]const u8{
-    "src/skynetlua.c",
 };

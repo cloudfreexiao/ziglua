@@ -7,6 +7,7 @@ const Step = std.Build.Step;
 const lua_setup = @import("build/lua.zig");
 const luau_setup = @import("build/luau.zig");
 const luajit_setup = @import("build/luajit.zig");
+const skynetlua_setup = @import("build/skynetlua.zig");
 
 pub fn build(b: *Build) void {
     // Remove the default install and uninstall steps
@@ -44,6 +45,7 @@ pub fn build(b: *Build) void {
     const lib = switch (lang) {
         .luajit => luajit_setup.configure(b, target, optimize, upstream, shared),
         .luau => luau_setup.configure(b, target, optimize, upstream, luau_use_4_vector),
+        .skynetlua => skynetlua_setup.configure(b, target, optimize, upstream, shared),
         else => lua_setup.configure(b, target, optimize, upstream, lang, shared),
     };
 
