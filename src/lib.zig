@@ -647,6 +647,8 @@ pub const Lua = opaque {
     }
 
     /// Deinitialize a Lua state and free all memory
+    ///
+    /// See https://www.lua.org/manual/5.4/manual.html#lua_close
     pub fn deinit(lua: *Lua) void {
         // First get a reference to the allocator
         var data: ?*Allocator = undefined;
@@ -731,6 +733,13 @@ pub const Lua = opaque {
         return c.lua_atpanic(@ptrCast(lua), panic_fn);
     }
 
+    pub const CallArgs = struct {
+        /// The number of args passed to the function from the stack
+        args: i32 = 0,
+        /// The number of results the function pushes to the stack upon returning
+        results: i32 = 0,
+    };
+
     /// Calls a function
     ///
     /// Like regular Lua calls, `Lua.call()` respects the `__call` metamethod. So, here the word "function" means any callable value.
@@ -739,49 +748,60 @@ pub const Lua = opaque {
     /// * First, the function to be called is pushed onto the stack
     /// * Then, the arguments to the call are pushed in direct order that is, the first argument is pushed first.
     /// * Finally you call `Lua.call()`
-    /// * `num_args` is the number of arguments that you pushed onto the stack. When the function returns, all arguments and
+    /// * `args.args` is the number of arguments that you pushed onto the stack. When the function returns, all arguments and
     /// the function value are popped and the call results are pushed onto the stack.
-    /// * The number of results is adjusted to `num_results`, unless `num_results` is `ziglua.mult_return`. In this case, all results from the function are pushed
+    /// * The number of results is adjusted to `args.results`, unless `args.results` is `ziglua.mult_return`. In this case, all results from the function are pushed
     /// * Lua takes care that the returned values fit into the stack space, but it does not ensure any extra space in the stack. The function results
     /// are pushed onto the stack in direct order (the first result is pushed first), so that after the call the last result is
     /// on the top of the stack.
     ///
     /// Any error while calling and running the function is propagated upwards (with a longjmp).
     ///
-    /// * Pops:   `(num_args+1)`
-    /// * Pushes: `num_results`
+    /// * Pops:   `(args.args+1)`
+    /// * Pushes: `args.results`
     /// * Errors: `other`
     ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_call
-    pub fn call(lua: *Lua, num_args: i32, num_results: i32) void {
+    pub fn call(lua: *Lua, args: CallArgs) void {
         switch (lang) {
-            .lua51, .luajit, .luau => c.lua_call(@ptrCast(lua), num_args, num_results),
-            else => lua.callCont(num_args, num_results, 0, null),
+            .lua51, .luajit, .luau => c.lua_call(@ptrCast(lua), args.args, args.results),
+            else => c.lua_callk(@ptrCast(lua), args.args, args.results, 0, null),
         }
     }
 
-    fn callCont52(lua: *Lua, num_args: i32, num_results: i32, ctx: i32, k: ?CFn) void {
-        c.lua_callk(@ptrCast(lua), num_args, num_results, ctx, k);
-    }
-
-    fn callCont53(lua: *Lua, num_args: i32, num_results: i32, ctx: Context, k: ?CContFn) void {
-        c.lua_callk(@ptrCast(lua), num_args, num_results, ctx, k);
-    }
+    /// Continuations are supported in Lua 5.2, 5.3, and 5.4
+    /// See https://www.lua.org/manual/5.4/manual.html#4.5
+    pub const CallContArgs = struct {
+        /// The number of args passed to the function from the stack
+        args: i32 = 0,
+        /// The number of results the function pushes to the stack upon returning
+        results: i32 = 0,
+        /// Context value passed to the continuation function
+        ctx: switch (lang) {
+            .lua52 => i32,
+            .lua53, .lua54 => Context,
+            else => void,
+        },
+        /// The continuation function
+        k: switch (lang) {
+            .lua52 => CFn,
+            .lua53, .lua54 => CContFn,
+            else => void,
+        },
+    };
 
     /// This function behaves exactly like `Lua.call()`, but allows the called function to yield
     ///
     /// Not implemented in Lua 5.1, LuaJIT, or Luau
     ///
-    /// * Pops:   `(nargs + 1)`
-    /// * Pushes: `nresults`
+    /// * Pops:   `(args.args + 1)`
+    /// * Pushes: `args.results`
     /// * Errors: `other`
     ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_callk
-    pub const callCont = switch (lang) {
-        .lua52 => callCont52,
-        .lua53, .lua54, .skynetlua => callCont53,
-        else => @compileError("callCont() not defined"),
-    };
+    pub fn callCont(lua: *Lua, args: CallContArgs) void {
+        c.lua_callk(@ptrCast(lua), args.args, args.results, args.ctx, args.k);
+    }
 
     /// Ensures that the stack has space for at least `n` extra elements, that is, that you can safely push up to `n` values into
     /// it. It returns an error if it cannot fulfill the request, either because it would cause the stack to be greater than a
@@ -791,7 +811,8 @@ pub const Lua = opaque {
     ///
     /// * Pops:   `0`
     /// * Pushes: `0`
-    /// * Errors: `never`
+    /// * Errors: `memory` (Lua 5.1, LuaJIT, Luau)
+    /// * Errors: `never` (Lua 5.2, 5.3, 5.4)
     ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_checkstack
     pub fn checkStack(lua: *Lua, n: i32) !void {
@@ -905,7 +926,8 @@ pub const Lua = opaque {
     ///
     /// * Pops:   `0`
     /// * Pushes: `1`
-    /// * Errors: `memory`
+    /// * Errors `other` (Lua 5.2)
+    /// * Errors: `memory` (other)
     ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_createtable
     pub fn createTable(lua: *Lua, num_arr: i32, num_rec: i32) void {
@@ -937,7 +959,9 @@ pub const Lua = opaque {
     ///
     /// * Pops:   `0`
     /// * Pushes: `0`
-    /// * Errors: `never`
+    /// * Errors: `memory` (Lua 5.1, LuaJIT)
+    /// * Errors: `other` (Lua 5.2)
+    /// * Errors: `never` (Lua 5.3, 5.4)
     ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_dump
     pub const dump = switch (lang) {
@@ -999,20 +1023,11 @@ pub const Lua = opaque {
         };
     }
 
-    fn gcStep54(lua: *Lua, step_size: i32) void {
-        _ = c.lua_gc(@ptrCast(lua), c.LUA_GCSTEP, step_size);
-    }
-
-    fn gcStep51(lua: *Lua) void {
-        _ = c.lua_gc(@ptrCast(lua), c.LUA_GCSTEP, 0);
-    }
-
     /// Performs an incremental step of garbage collection corresponding to the allocation of step_size Kbytes
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
-    pub const gcStep = switch (lang) {
-        .lua54, .skynetlua => gcStep54,
-        else => gcStep51,
-    };
+    pub fn gcStep(lua: *Lua, step_size: i32) void {
+        _ = c.lua_gc(@ptrCast(lua), c.LUA_GCSTEP, step_size);
+    }
 
     /// Returns the current amount of memory (in Kbytes) in use by Lua
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gc
@@ -1224,6 +1239,8 @@ pub const Lua = opaque {
     /// Pushes onto the stack the nth user value associated with the full userdata at the given index
     /// Returns the type of the pushed value or an error if the userdata does not have that value
     /// Pushes nil if the userdata does not have that value
+    ///
+    /// See https://www.lua.org/manual/5.3/manual.html#lua_getuservalue
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getiuservalue
     pub const getUserValue = switch (lang) {
         .lua53 => getUserValue53,
@@ -1233,13 +1250,26 @@ pub const Lua = opaque {
 
     /// If the value at the given index has a metatable, the function pushes that metatable onto the stack
     /// Otherwise an error is returned
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `(0|1)`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getmetatable
     pub fn getMetatable(lua: *Lua, index: i32) !void {
         if (c.lua_getmetatable(@ptrCast(lua), index) == 0) return error.LuaError;
     }
 
-    /// Pushes onto the stack the value t[k] where t is the value at the given index and k is the value on the top of the stack
-    /// Returns the type of the pushed value
+    /// Pushes onto the stack the value `t[k]`, where `t` is the value at the given `index` and `k` is the value on the top of the stack.
+    /// This function pops the key from the stack, pushing the resulting value in its place. As in Lua, this function may
+    /// trigger a metamethod for the "index" event.
+    ///
+    /// Returns the type of the pushed value.
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `1`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gettable
     pub fn getTable(lua: *Lua, index: i32) LuaType {
         switch (lang) {
@@ -1251,127 +1281,236 @@ pub const Lua = opaque {
         }
     }
 
-    /// Returns the index of the top element in the stack
-    /// Because indices start at 1, the result is also equal to the number of elements in the stack
+    /// Returns the index of the top element in the stack. Because indices start at 1, this result is equal to the number of
+    /// elements in the stack; in particular, 0 means an empty stack.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gettop
     pub fn getTop(lua: *Lua) i32 {
         return c.lua_gettop(@ptrCast(lua));
     }
 
+    /// Only available in Luau
     pub fn setReadonly(lua: *Lua, idx: i32, enabled: bool) void {
         c.lua_setreadonly(@ptrCast(lua), idx, @intFromBool(enabled));
     }
 
+    /// Only available in Luau
     pub fn getReadonly(lua: *Lua, idx: i32) bool {
         return c.lua_getreadonly(@ptrCast(lua), idx) != 0;
     }
 
-    /// Moves the top element into the given valid `index` shifting up any elements to make room
+    /// Moves the top element into the given valid `index`, shifting up the elements above this `index` to open space. Cannot be
+    /// called with a pseudo-index, because a pseudo-index is not an actual stack position.
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_insert
     pub fn insert(lua: *Lua, index: i32) void {
         c.lua_insert(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the value at the given index is a boolean
+    /// Returns true if the value at the given `index` is a boolean
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isboolean
     pub fn isBoolean(lua: *Lua, index: i32) bool {
         return c.lua_isboolean(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the value at the given index is a CFn
+    /// Returns true if the value at the given `index` is a CFn
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_iscfunction
     pub fn isCFunction(lua: *Lua, index: i32) bool {
         return c.lua_iscfunction(@ptrCast(lua), index) != 0;
     }
 
-    /// Returns true if the value at the given index is a function (C or Lua)
+    /// Returns true if the value at the given `index` is a function (C or Lua)
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isfunction
     pub fn isFunction(lua: *Lua, index: i32) bool {
         return c.lua_isfunction(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the value at the given index is an integer
+    /// Returns true if the value at the given `index` is an integer
+    ///
+    /// Only available in Lua 5.3 and 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isinteger
     pub fn isInteger(lua: *Lua, index: i32) bool {
         return c.lua_isinteger(@ptrCast(lua), index) != 0;
     }
 
-    /// Returns true if the value at the given index is a light userdata
+    /// Returns true if the value at the given `index` is a light userdata
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_islightuserdata
     pub fn isLightUserdata(lua: *Lua, index: i32) bool {
         return c.lua_islightuserdata(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the value at the given index is nil
+    /// Returns true if the value at the given `index` is nil
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isnil
     pub fn isNil(lua: *Lua, index: i32) bool {
         return c.lua_isnil(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the given index is not valid
+    /// Returns true if the given `index` is not valid
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isnone
     pub fn isNone(lua: *Lua, index: i32) bool {
         return c.lua_isnone(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the given index is not valid or if the value at the index is nil
+    /// Returns true if the given `index` is not valid or if the value at the index is nil
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isnoneornil
     pub fn isNoneOrNil(lua: *Lua, index: i32) bool {
         return c.lua_isnoneornil(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the value at the given index is a number
+    /// Returns true if the value at the given `index` is a number
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isnumber
     pub fn isNumber(lua: *Lua, index: i32) bool {
         return c.lua_isnumber(@ptrCast(lua), index) != 0;
     }
 
-    /// Returns true if the value at the given index is a string
+    /// Returns true if the value at the given `index` is a string or a number (which is always convertible to a string)
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isstring
     pub fn isString(lua: *Lua, index: i32) bool {
         return c.lua_isstring(@ptrCast(lua), index) != 0;
     }
 
-    /// Returns true if the value at the given index is a table
+    /// Returns true if the value at the given `index` is a table
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_istable
     pub fn isTable(lua: *Lua, index: i32) bool {
         return c.lua_istable(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the value at the given index is a thread
+    /// Returns true if the value at the given `index` is a thread
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isthread
     pub fn isThread(lua: *Lua, index: i32) bool {
         return c.lua_isthread(@as(*LuaState, @ptrCast(lua)), index);
     }
 
-    /// Returns true if the value at the given index is a userdata (full or light)
+    /// Returns true if the value at the given `index` is a userdata (either full or light)
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isuserdata
     pub fn isUserdata(lua: *Lua, index: i32) bool {
         return c.lua_isuserdata(@ptrCast(lua), index) != 0;
     }
 
-    /// Returns true if the value at the given index is a vector
+    /// Returns true if the value at the given `index` is a vector
+    ///
+    /// Only available in Luau
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     pub fn isVector(lua: *Lua, index: i32) bool {
         return c.lua_isvector(@as(*LuaState, @ptrCast(lua)), index);
     }
 
     /// Returns true if the given coroutine can yield
+    ///
+    /// Only available in Lua 5.3 and 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_isyieldable
     pub fn isYieldable(lua: *Lua) bool {
         return c.lua_isyieldable(@ptrCast(lua)) != 0;
     }
 
-    /// Pushes the length of the value at the given index onto the stack
-    /// Equivalent to the # operator in Lua
+    /// Pushes the length of the value at the given `index` onto the stack
+    /// Equivalent to the # operator in Lua and may
+    /// trigger a metamethod for the "length" event. The result is pushed on the stack.
+    ///
+    /// Only implemented in Lua 5.2, 5.3, and 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_len
     pub fn len(lua: *Lua, index: i32) void {
         c.lua_len(@ptrCast(lua), index);
     }
 
-    /// Returns true if the value at index1 is smaller than the value at index2, following the
-    /// semantics of the Lua < operator.
+    /// Returns true if the value at `index1` is smaller than the value at `index2`, following the
+    /// semantics of the Lua `<` operator (that is, may call metamethods). Also returns false if any of the
+    /// indices is non valid.
+    ///
+    /// Only implemented in Lua 5.1, LuaJIT, and Luau
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_lessthan
-    /// TODO: maybe implement these using compare somehow?
     pub fn lessThan(lua: *Lua, index1: i32, index2: i32) bool {
         return c.lua_lessthan(@ptrCast(lua), index1, index2) == 1;
     }
@@ -1426,7 +1565,13 @@ pub const Lua = opaque {
     };
 
     /// Creates a new empty table and pushes it onto the stack
-    /// Equivalent to createTable(0, 0)
+    /// Equivalent to `Lua.createTable(0, 0)`
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `other` (Lua 5.2)
+    /// * Errors: `memory` (All other versions)
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_newtable
     pub fn newTable(lua: *Lua) void {
         c.lua_newtable(@as(*LuaState, @ptrCast(lua)));
@@ -1434,6 +1579,12 @@ pub const Lua = opaque {
 
     /// Creates a new thread, pushes it on the stack, and returns a Lua state that represents the new thread
     /// The new thread shares the global environment but has a separate execution stack
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `other` (Lua 5.2)
+    /// * Errors: `memory` (All other versions)
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_newthread
     pub fn newThread(lua: *Lua) *Lua {
         return @ptrCast(c.lua_newthread(@ptrCast(lua)).?);
@@ -1517,27 +1668,50 @@ pub const Lua = opaque {
         return @ptrCast(@alignCast(ptr));
     }
 
-    /// Pops a key from the stack, and pushes a key-value pair from the table at the given index
+    /// Pops a key from the stack, and pushes a key–value pair from the table at the given `index`, the "next" pair after the
+    /// given key. If there are no more elements in the table, then lua_next returns 0 and pushes nothing.
+    ///
+    /// While traversing a table, avoid calling `Lua.toString()` directly on a key, unless you know that the key is actually a
+    /// string. Recall that `Lua.toString()` may change the value at the given `index`; this confuses the next call to `Lua.next()`.
+    /// This function may raise an error if the given key is neither nil nor present in the table. See the Lua function `next()` for the
+    /// caveats of modifying the table during its traversal.
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `(2|0)`
+    /// * Errors: `explained in text / on purpose`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_next
     pub fn next(lua: *Lua, index: i32) bool {
         return c.lua_next(@ptrCast(lua), index) != 0;
     }
 
-    /// Tries to convert a Lua float into a Lua integer
-    /// Returns an error if the conversion was unsuccessful
+    /// Tries to convert a Lua float to a Lua integer; the float `n` must have an integral value. If that value is within the range of Lua integers, it is converted to an integer and assigned to *p. The macro results in a boolean indicating whether the conversion was successful. (Note that this range test can be tricky to do correctly without this macro, due to rounding.)
+    ///
+    /// Only available in Lua 5.4
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_numbertointeger
-    pub fn numberToInteger(n: Number, i: *Integer) !void {
+    pub fn numberToInteger(n: Number) !Integer {
         // translate-c failure
         // return c.lua_numbertointeger(n, i) != 0;
         const min_float: Number = @floatFromInt(min_integer);
         if (n >= min_float and n < -min_float) {
-            i.* = @intFromFloat(n);
+            return @intFromFloat(n);
         } else return error.LuaError;
     }
 
-    /// Returns the length of the value at the given index
+    /// Returns the "length" of the value at the given acceptable `index`:
+    /// * for strings, this is the string length
+    /// * for tables, this is the result of the length operator ('#')
+    /// * for userdata, this is the size of the block of memory allocated for the userdata
+    /// * for other values, it is 0.
+    ///
+    /// Only implemented in Lua 5.1, LuaJIT, and Luau
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.1/manual.html#lua_objlen
-    /// TODO: this might be nice to map to "len"
     pub fn objectLen(lua: *Lua, index: i32) switch (lang) {
         .luau => i32,
         else => usize,
@@ -1545,106 +1719,163 @@ pub const Lua = opaque {
         return c.lua_objlen(@ptrCast(lua), index);
     }
 
-    fn protectedCall51(lua: *Lua, num_args: i32, num_results: i32, err_func: i32) !void {
-        // The translate-c version of lua_pcall does not type-check so we must rewrite it
-        // (macros don't always translate well with translate-c)
-        const ret = c.lua_pcall(@ptrCast(lua), num_args, num_results, err_func);
-        switch (ret) {
-            StatusCode.ok => return,
-            StatusCode.err_runtime => return error.LuaRuntime,
-            StatusCode.err_memory => return error.OutOfMemory,
-            StatusCode.err_error => return error.LuaMsgHandler,
-            else => unreachable,
-        }
-    }
-
-    fn protectedCall52(lua: *Lua, num_args: i32, num_results: i32, msg_handler: i32) !void {
-        // The translate-c version of lua_pcall does not type-check so we must rewrite it
-        // (macros don't always translate well with translate-c)
-        const ret = c.lua_pcallk(@ptrCast(lua), num_args, num_results, msg_handler, 0, null);
-
-        return switch (lang) {
-            .lua54, .skynetlua => switch (ret) {
-                StatusCode.ok => return,
-                StatusCode.err_runtime => return error.LuaRuntime,
-                StatusCode.err_memory => return error.OutOfMemory,
-                StatusCode.err_error => return error.LuaMsgHandler,
-                else => unreachable,
-            },
-            else => switch (ret) {
-                StatusCode.ok => return,
-                StatusCode.err_runtime => return error.LuaRuntime,
-                StatusCode.err_memory => return error.OutOfMemory,
-                StatusCode.err_error => return error.LuaMsgHandler,
-                StatusCode.err_gcmm => return error.LuaGCMetaMethod,
-                else => unreachable,
-            },
-        };
-    }
-
-    /// Calls a function (or callable object) in protected mode
-    /// See https://www.lua.org/manual/5.4/manual.html#lua_pcall
-    pub const protectedCall = switch (lang) {
-        .lua51, .luajit, .luau => protectedCall51,
-        else => protectedCall52,
+    pub const ProtectedCallArgs = struct {
+        /// The number of args passed to the function from the stack
+        args: i32 = 0,
+        /// The number of results the function pushes to the stack upon returning
+        results: i32 = 0,
+        /// The stack index of a message handler (known as errfunc in some versions of Lua)
+        msg_handler: i32 = 0,
     };
 
-    fn protectedCallCont52(lua: *Lua, num_args: i32, num_results: i32, msg_handler: i32, ctx: i32, k: CFn) !void {
-        const ret = c.lua_pcallk(@ptrCast(lua), num_args, num_results, msg_handler, ctx, k);
-        switch (ret) {
-            StatusCode.ok => return,
-            StatusCode.err_runtime => return error.LuaRuntime,
-            StatusCode.err_memory => return error.OutOfMemory,
-            StatusCode.err_error => return error.LuaMsgHandler,
-            StatusCode.err_gcmm => return error.LuaGCMetaMethod,
-            else => unreachable,
-        }
-    }
-
-    fn protectedCallCont53(lua: *Lua, num_args: i32, num_results: i32, msg_handler: i32, ctx: Context, k: CContFn) !void {
-        const ret = c.lua_pcallk(@ptrCast(lua), num_args, num_results, msg_handler, ctx, k);
-
-        return switch (lang) {
-            .lua54, .skynetlua => switch (ret) {
-                StatusCode.ok => return,
-                StatusCode.err_runtime => return error.LuaRuntime,
-                StatusCode.err_memory => return error.OutOfMemory,
-                StatusCode.err_error => return error.LuaMsgHandler,
-                else => unreachable,
-            },
-            else => switch (ret) {
-                StatusCode.ok => return,
-                StatusCode.err_runtime => return error.LuaRuntime,
-                StatusCode.err_memory => return error.OutOfMemory,
-                StatusCode.err_error => return error.LuaMsgHandler,
-                StatusCode.err_gcmm => return error.LuaGCMetaMethod,
-                else => unreachable,
-            },
-        };
-    }
-
-    /// Behaves exactly like `Lua.protectedCall()` except that it allows the called function to yield
+    /// Calls a function (or a callable object) in protected mode.
+    /// Both `args.args` and `args.results` have the same meaning as in `Lua.call()`. If there are no errors during the call, `Lua.protectedCall()` behaves
+    /// exactly like `Lua.call()`. However, if there is any error, `Lua.protectedCall()` catches it, pushes a single value on the stack (the
+    /// error object), and returns an error code. Like `Lua.call()`, `Lua.protectedCall()` always removes the function and its arguments from
+    /// the stack.
+    ///
+    /// If `args.msg_handler` is 0, then the error object returned on the stack is exactly the original error object. Otherwise, `args.msg_handler` is the
+    /// stack index of a message handler. (This index cannot be a pseudo-index.) In case of runtime errors, this handler will
+    /// be called with the error object and its return value will be the object returned on the stack by `Lua.protectedCall()`.
+    /// Typically, the message handler is used to add more debug information to the error object, such as a stack traceback.
+    /// Such information cannot be gathered after the return of `Lua.protectedCall()`, since by then the stack has unwound.
+    ///
+    /// * Pops:   `(args.args + 1)`
+    /// * Pushes: `(args.results|1)`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pcallk
-    pub const protectedCallCont = switch (lang) {
-        .lua52 => protectedCallCont52,
-        .lua53, .lua54, .skynetlua => protectedCallCont53,
-        else => @compileError("protectedCallCont() not implemented"),
+    pub fn protectedCall(lua: *Lua, args: ProtectedCallArgs) !void {
+        const ret = switch (lang) {
+            .lua51, .luajit, .luau => c.lua_pcall(@ptrCast(lua), args.args, args.results, args.msg_handler),
+            else => c.lua_pcallk(@ptrCast(lua), args.args, args.results, args.msg_handler, 0, null),
+        };
+
+        return switch (lang) {
+            .lua54, .skynetlua => switch (ret) {
+                StatusCode.ok => return,
+                StatusCode.err_runtime => return error.LuaRuntime,
+                StatusCode.err_memory => return error.OutOfMemory,
+                StatusCode.err_error => return error.LuaMsgHandler,
+                else => unreachable,
+            },
+            .lua52, .lua53 => switch (ret) {
+                StatusCode.ok => return,
+                StatusCode.err_runtime => return error.LuaRuntime,
+                StatusCode.err_memory => return error.OutOfMemory,
+                StatusCode.err_error => return error.LuaMsgHandler,
+                StatusCode.err_gcmm => return error.LuaGCMetaMethod,
+                else => unreachable,
+            },
+            else => switch (ret) {
+                StatusCode.ok => return,
+                StatusCode.err_runtime => return error.LuaRuntime,
+                StatusCode.err_memory => return error.OutOfMemory,
+                StatusCode.err_error => return error.LuaMsgHandler,
+                else => unreachable,
+            },
+        };
+    }
+
+    pub const ProtectedCallContArgs = struct {
+        /// The number of args passed to the function from the stack
+        args: i32 = 0,
+        /// The number of results the function pushes to the stack upon returning
+        results: i32 = 0,
+        /// The stack index of a message handler (known as errfunc in some versions of Lua)
+        msg_handler: i32 = 0,
+        /// Context value passed to the continuation function
+        ctx: switch (lang) {
+            .lua52 => i32,
+            .lua53, .lua54, .skynetlua => Context,
+            else => void,
+        },
+        /// The continuation function
+        k: switch (lang) {
+            .lua52 => CFn,
+            .lua53, .lua54, .skynetlua => CContFn,
+            else => void,
+        },
     };
+
+    /// This function behaves exactly like `Lua.protectedCall()`, except that it allows the called function to yield
+    ///
+    /// * Pops:   `(nargs + 1)`
+    /// * Pushes: `(nresults|1)`
+    /// * Errors: `never`
+    ///
+    /// See https://www.lua.org/manual/5.4/manual.html#lua_pcallk
+    pub fn protectedCallCont(lua: *Lua, args: ProtectedCallContArgs) !void {
+        const ret = switch (lang) {
+            .lua51, .luajit, .luau => c.lua_pcall(@ptrCast(lua), args.args, args.results, args.msg_handler),
+            else => c.lua_pcallk(@ptrCast(lua), args.args, args.results, args.msg_handler, 0, null),
+        };
+
+        return switch (lang) {
+            .lua54, .skynetlua => switch (ret) {
+                StatusCode.ok => return,
+                StatusCode.err_runtime => return error.LuaRuntime,
+                StatusCode.err_memory => return error.OutOfMemory,
+                StatusCode.err_error => return error.LuaMsgHandler,
+                else => unreachable,
+            },
+            .lua52, .lua53 => switch (ret) {
+                StatusCode.ok => return,
+                StatusCode.err_runtime => return error.LuaRuntime,
+                StatusCode.err_memory => return error.OutOfMemory,
+                StatusCode.err_error => return error.LuaMsgHandler,
+                StatusCode.err_gcmm => return error.LuaGCMetaMethod,
+                else => unreachable,
+            },
+            else => @compileError("Only implemented in Lua 5.2, 5.3, and 5.4"),
+        };
+    }
 
     /// Pops `n` elements from the top of the stack
+    ///
+    /// * Pops:   `n`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pop
     pub fn pop(lua: *Lua, n: i32) void {
         lua.setTop(-n - 1);
     }
 
     /// Pushes a boolean value with value `b` onto the stack
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushboolean
     pub fn pushBoolean(lua: *Lua, b: bool) void {
         c.lua_pushboolean(@ptrCast(lua), @intFromBool(b));
     }
 
-    /// Pushes a new Closure onto the stack
-    /// `n` tells how many upvalues this function will have
+    /// Pushes a new C closure onto the stack. This function receives a pointer to a C function and pushes onto the stack a Lua
+    /// value of type function that, when called, invokes the corresponding C function. The parameter `n` tells how many upvalues
+    /// this function will have.
+    ///
+    /// Any function to be callable by Lua must follow the correct protocol to receive its parameters and return its results.
+    ///
+    ///
+    /// When a C function is created, it is possible to associate some values with it, the so called upvalues; these upvalues
+    /// are then accessible to the function whenever it is called. This association is called a C closure. To create
+    /// a C closure, first the initial values for its upvalues must be pushed onto the stack. (When there are multiple
+    /// upvalues, the first value is pushed first.) Then `Lua.pushClosure()` is called to create and push the C function onto the
+    /// stack, with the argument `n` telling how many values will be associated with the function. `Lua.pushClosure()` also pops
+    /// these values from the stack.
+    /// The maximum value for `n` is 255.
+    ///
+    /// When `n` is zero, this function creates a light C function, which is just a pointer to the C function. In that case, it
+    /// never raises a memory error.
+    ///
+    /// * Pops:   `n`
+    /// * Pushes: `1`
+    /// * Errors: `other` (Lua 5.2)
+    /// * Errors: `memory` (All other versions)
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushcclosure
     pub fn pushClosure(lua: *Lua, c_fn: CFn, n: i32) void {
         switch (lang) {
@@ -1653,14 +1884,21 @@ pub const Lua = opaque {
         }
     }
 
-    /// Pushes a new Closure onto the stack with a debugname
-    /// `n` tells how many upvalues this function will have
+    /// Pushes a new Closure onto the stack with a debugname. See `Lua.pushClosure()` for full details.
+    ///
+    /// Only available in Luau
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushcclosure
     pub fn pushClosureNamed(lua: *Lua, c_fn: CFn, debugname: [:0]const u8, n: i32) void {
         c.lua_pushcclosurek(@ptrCast(lua), c_fn, debugname, n, null);
     }
 
-    /// Pushes a new function onto the stack
+    /// Pushes a new function onto the stack. Equivalent to `Lua.pushClosure()` with no upvalues.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushcfunction
     pub fn pushFunction(lua: *Lua, c_fn: CFn) void {
         switch (lang) {
@@ -1669,13 +1907,35 @@ pub const Lua = opaque {
         }
     }
 
-    /// Pushes a new function onto the stack with a debugname
+    /// Pushes a new function onto the stack with a debugname. See `Lua.pushFunction()` for full details.
+    ///
+    /// Only available in Luau
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushcfunction
     pub fn pushFunctionNamed(lua: *Lua, c_fn: CFn, debugname: [:0]const u8) void {
         c.lua_pushcclosurek(@ptrCast(lua), c_fn, debugname, 0, null);
     }
 
-    /// Push a formatted string onto the stack and return a pointer to the string
+    /// Pushes onto the stack a formatted string and returns a pointer to this string. It is similar to the ISO C
+    /// function `sprintf`, but has two important differences. First, you do not have to allocate space for the result; the
+    /// result is a Lua string and Lua takes care of memory allocation (and deallocation, through garbage collection). Second,
+    /// the conversion specifiers are quite restricted. There are no flags, widths, or precisions. The conversion specifiers
+    /// can only be:
+    /// * `%%` inserts the character `%`
+    /// * `%s` inserts a zero-terminated string, with no size restrictions
+    /// * `%f` inserts a lua_Number
+    /// * `%I` inserts a lua_Integer (Only in Lua 5.3 and 5.4)
+    /// * `%p` inserts a pointer
+    /// * `%d` inserts an int
+    /// * `%c` inserts an int as a one-byte character
+    /// * `%U` inserts a long int as a UTF-8 byte sequence (Only in Lua 5.3 and 5.4)
+    ///
+    /// This function may raise errors due to memory overflow or an invalid conversion specifier.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `explained in text / on purpose`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushfstring
     pub fn pushFString(lua: *Lua, fmt: [:0]const u8, args: anytype) [:0]const u8 {
         const ptr = @call(
@@ -1688,6 +1948,13 @@ pub const Lua = opaque {
     }
 
     /// Pushes the global environment onto the stack
+    ///
+    /// Only implemented in Lua 5.2, 5.3 and 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushglobaltable
     pub fn pushGlobalTable(lua: *Lua) void {
         // lua_pushglobaltable is a macro and c-translate assumes it returns opaque
@@ -1697,18 +1964,42 @@ pub const Lua = opaque {
     }
 
     /// Pushes an integer with value `n` onto the stack
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushinteger
     pub fn pushInteger(lua: *Lua, n: Integer) void {
         c.lua_pushinteger(@ptrCast(lua), n);
     }
 
-    /// Pushes a light userdata onto the stack
+    /// Pushes a light userdata onto the stack.
+    ///
+    /// Userdata represent C values in Lua. A light userdata represents a pointer, an `*anyopaque`. It is a value (like a number): you
+    /// do not create it, it has no individual metatable, and it is not collected (as it was never created). A light userdata
+    /// is equal to "any" light userdata with the same memory address.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushlightuserdata
     pub fn pushLightUserdata(lua: *Lua, ptr: *anyopaque) void {
         c.lua_pushlightuserdata(@as(*LuaState, @ptrCast(lua)), ptr);
     }
 
-    /// Pushes the string onto the stack. Returns a slice pointing to Lua's internal copy of the string
+    /// Pushes the string pointed to by `str` onto the stack. Lua will make or reuse an internal copy of the given
+    /// string, so the memory at `str` can be freed or reused immediately after the function returns. The string can contain any
+    /// binary data, including embedded zeros.
+    ///
+    /// Returns a slice that points to the internal Lua copy of the string
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `other` (Lua 5.2)
+    /// * Errors: `memory` (All other versions)
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushlstring
     pub fn pushString(lua: *Lua, str: []const u8) [:0]const u8 {
         switch (lang) {
@@ -1721,20 +2012,37 @@ pub const Lua = opaque {
     }
 
     /// Pushes a nil value onto the stack
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushnil
     pub fn pushNil(lua: *Lua) void {
         c.lua_pushnil(@ptrCast(lua));
     }
 
     /// Pushes a float with value `n` onto the stack
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushnumber
     pub fn pushNumber(lua: *Lua, n: Number) void {
         c.lua_pushnumber(@ptrCast(lua), n);
     }
 
-    /// Pushes a zero-terminated string onto the stack
-    /// Lua makes a copy of the string so `str` may be freed immediately after return
-    /// Returns a pointer to the internal Lua string
+    /// Pushes the zero-terminated string pointed to by `str` onto the stack. Lua will make or reuse an internal copy of the given
+    /// string, so the memory at `str` can be freed or reused immediately after the function returns.
+    ///
+    /// Returns a slice that points to the internal Lua copy of the string.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `other` (Lua 5.2)
+    /// * Errors: `memory` (All other versions)
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushstring
     pub fn pushStringZ(lua: *Lua, str: [:0]const u8) [:0]const u8 {
         switch (lang) {
@@ -1746,20 +2054,38 @@ pub const Lua = opaque {
         }
     }
 
-    /// Pushes this thread onto the stack
-    /// Returns true if this thread is the main thread of its state
+    /// Pushes the thread represented by `lua` onto the stack. Returns true if this thread is the main thread of its state.
+    ///
+    /// Can be called as `Lua.pushThread(thread) to push another thread's state.`
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushthread
     pub fn pushThread(lua: *Lua) bool {
         return c.lua_pushthread(@ptrCast(lua)) != 0;
     }
 
-    /// Pushes a number with value n onto the stack
+    /// Pushes a number with value `n` onto the stack
+    ///
+    /// Only available in Lua 5.2
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.2/manual.html#lua_pushunsigned
     pub fn pushUnsigned(lua: *Lua, n: Unsigned) void {
         return c.lua_pushunsigned(@ptrCast(lua), n);
     }
 
     /// Pushes a copy of the element at the given index onto the stack
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_pushvalue
     pub fn pushValue(lua: *Lua, index: i32) void {
         c.lua_pushvalue(@ptrCast(lua), index);
@@ -1774,17 +2100,32 @@ pub const Lua = opaque {
     }
 
     /// Pushes a floating point 3-vector (or 4-vector if configured) `v` onto the stack
+    ///
+    /// Only available in Luau
     pub const pushVector = if (luau_vector_size == 3) pushVector3 else pushVector4;
 
     /// Returns true if the two values in indices `index1` and `index2` are primitively equal
-    /// Bypasses __eq metamethods
-    /// Returns false if not equal, or if any index is invalid
+    /// (that is, equal without calling the `__eq` metamethod). Otherwise returns false.
+    /// Also returns false if any of the indices are not valid.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rawequal
+    /// TODO: should this be rename to equalRaw?
     pub fn rawEqual(lua: *Lua, index1: i32, index2: i32) bool {
         return c.lua_rawequal(@ptrCast(lua), index1, index2) != 0;
     }
 
-    /// Similar to `Lua.getTable()` but does a raw access (without metamethods)
+    /// Similar to `Lua.getTable()` but does a raw access (without metamethods).
+    ///
+    /// Returns the type of the pushed value.
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rawget
     /// TODO: should this be renamed to getTableRaw (seems more logical)?
     pub fn rawGetTable(lua: *Lua, index: i32) LuaType {
@@ -1803,7 +2144,14 @@ pub const Lua = opaque {
     };
 
     /// Pushes onto the stack the value t[n], where `t` is the table at the given `index`
+    /// The access is raw, that is, it does not use the `__index` metavalue.
+    ///
     /// Returns the `LuaType` of the pushed value
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rawgeti
     pub fn rawGetIndex(lua: *Lua, index: i32, n: RawGetIndexNType) LuaType {
         switch (lang) {
@@ -1815,9 +2163,16 @@ pub const Lua = opaque {
         }
     }
 
-    /// Pushes onto the stack the value t[k] where t is the table at the given `index` and
-    /// k is the pointer `p` represented as a light userdata
-    /// rawgetp
+    /// Pushes onto the stack the value `t[k]`, where `t` is the table at the given `index` and `k` is the pointer `p` represented as a
+    /// light userdata.
+    ///
+    /// Not available in Lua 5.1, LuaJIT, or Luau
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
+    /// See https://www.lua.org/manual/5.4/manual.html#lua_rawgetp
     pub fn rawGetPtr(lua: *Lua, index: i32, p: *const anyopaque) LuaType {
         switch (lang) {
             .lua53, .lua54, .skynetlua => return @enumFromInt(c.lua_rawgetp(@ptrCast(lua), index, p)),
@@ -1828,10 +2183,18 @@ pub const Lua = opaque {
         }
     }
 
-    /// Returns the raw length of the value at the given index
-    /// For strings it is the length; for tables it is the result of the `#` operator
-    /// For userdata it is the size of the block of memory
-    /// For other values the call returns 0
+    /// Returns the raw "length" of the value at the given index:
+    /// * for strings, this is the string length
+    /// * for tables, this is the result of the length operator ('#') with no metamethods
+    /// * for userdata, this is the size of the block of memory allocated for the userdata
+    /// * For other values, this call returns 0.
+    ///
+    /// Not available in Lua 5.1, LuaJIT or Luau
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rawlen
     pub fn rawLen(lua: *Lua, index: i32) usize {
         switch (lang) {
@@ -1841,6 +2204,11 @@ pub const Lua = opaque {
     }
 
     /// Similar to `Lua.setTable()` but does a raw assignment (without metamethods)
+    ///
+    /// * Pops:   `2`
+    /// * Pushes: `0`
+    /// * Errors: `memory`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rawset
     pub fn rawSetTable(lua: *Lua, index: i32) void {
         c.lua_rawset(@ptrCast(lua), index);
@@ -1851,35 +2219,58 @@ pub const Lua = opaque {
         else => Integer,
     };
 
-    /// Does the equivalent of t[`i`] = v where t is the table at the given `index`
-    /// and v is the value at the top of the stack
-    /// Pops the value from the stack. Does not use __newindex metavalue
+    /// Does the equivalent of `t[i] = v`, where `t` is the table at the given `index` and `v` is the value on the top of the stack.
+    /// This function pops the value from the stack. The assignment is raw, that is, it does not use the `__newindex` metavalue.
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `memory`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rawseti
     pub fn rawSetIndex(lua: *Lua, index: i32, i: RawSetIndexIType) void {
         c.lua_rawseti(@ptrCast(lua), index, i);
     }
 
-    /// Does the equivalent of t[p] = v where t is the table at the given `index`
-    /// `p` is encoded as a light user data, and v is the value at the top of the stack
-    /// Pops the value from the stack. Does not use __newindex metavalue
-    /// rawsetp
+    /// Does the equivalent of `t[p] = v`, where `t` is the table at the given `index`, `p` is encoded as a light userdata, and `v` is
+    /// the value on the top of the stack.
+    ///
+    /// This function pops the value from the stack. The assignment is raw, that is, it does not use the `__newindex` metavalue.
+    ///
+    /// Not available in Lua 5.1, LuaJIT or Luau
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `memory`
+    ///
+    /// See https://www.lua.org/manual/5.4/manual.html#lua_rawsetp
     pub fn rawSetPtr(lua: *Lua, index: i32, p: *const anyopaque) void {
         c.lua_rawsetp(@ptrCast(lua), index, p);
     }
 
-    /// Sets the C function f as the new value of global name
+    /// Sets the C function `f` as the new value of global `name`
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_register
-    pub fn register(lua: *Lua, name: [:0]const u8, c_fn: CFn) void {
+    pub fn register(lua: *Lua, name: [:0]const u8, f: CFn) void {
         switch (lang) {
             .luau => {
-                lua.pushFunction(c_fn);
+                lua.pushFunction(f);
                 lua.setGlobal(name);
             },
-            else => c.lua_register(@as(*LuaState, @ptrCast(lua)), name.ptr, c_fn),
+            else => c.lua_register(@as(*LuaState, @ptrCast(lua)), name.ptr, f),
         }
     }
 
-    /// Removes the element at the given valid `index` shifting down elements to fill the gap
+    /// Removes the element at the given valid `index` shifting down elements to fill the gap.
+    /// This function cannot be called with a pseudo-index, because a pseudo-index is not an actual stack position.
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_remove
     pub fn remove(lua: *Lua, index: i32) void {
         c.lua_remove(@as(*LuaState, @ptrCast(lua)), index);
@@ -1887,15 +2278,14 @@ pub const Lua = opaque {
 
     /// Moves the top element into the given valid `index` without shifting any elements,
     /// then pops the top element
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_replace
     pub fn replace(lua: *Lua, index: i32) void {
         c.lua_replace(@as(*LuaState, @ptrCast(lua)), index);
-    }
-
-    /// This function is deprecated; it is equivalent to closeThread() with from being null.
-    /// See https://www.lua.org/manual/5.4/manual.html#lua_resetthread
-    pub fn resetThread(lua: *Lua) !void {
-        return lua.closeThread(null);
     }
 
     pub fn resumeThread51(lua: *Lua, num_args: i32) !ResumeStatus {
@@ -1953,36 +2343,72 @@ pub const Lua = opaque {
         .luau => resumeThreadLuau,
     };
 
-    /// Rotates the stack elements between the valid `index` and the top of the stack
-    /// The elements are rotated `n` positions in the direction of the top for positive `n`,
-    /// and `n` positions in the direction of the bottom for negative `n`
+    /// Rotates the stack elements between the valid index `index` and the top of the stack. The elements are rotated `n` positions
+    /// in the direction of the top, for a positive `n`, or `-n` positions in the direction of the bottom, for a negative `n`. The
+    /// absolute value of `n` must not be greater than the size of the slice being rotated. This function cannot be called with a
+    /// pseudo-index, because a pseudo-index is not an actual stack position.
+    ///
+    /// Only available in Lua 5.3 and 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_rotate
     pub fn rotate(lua: *Lua, index: i32, n: i32) void {
         c.lua_rotate(@ptrCast(lua), index, n);
     }
 
     /// Pops a table from the stack and sets it as the new environment for the value at the
-    /// given index. Returns an error if the value at that index is not a function or thread or userdata.
+    /// given `index`. Returns an error if the value at that index is not a function or thread or userdata.
+    ///
+    /// Only implemented in Lua 5.1 and Luau
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.1/manual.html#lua_setfenv
     pub fn setFnEnvironment(lua: *Lua, index: i32) !void {
         if (c.lua_setfenv(@ptrCast(lua), index) == 0) return error.LuaError;
     }
 
-    /// Does the equivalent to t[`k`] = v where t is the value at the given `index`
-    /// and v is the value on the top of the stack
+    /// Does the equivalent to `t[k] = v` where `t` is the value at the given `index`
+    /// and `v` is the value on the top of the stack
+    ///
+    /// This function pops the value from the stack. As in Lua, this function may trigger a metamethod for the `__newindex` event
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_setfield
     pub fn setField(lua: *Lua, index: i32, k: [:0]const u8) void {
         c.lua_setfield(@ptrCast(lua), index, k.ptr);
     }
 
     /// Pops a value from the stack and sets it as the new value of global `name`
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_setglobal
     pub fn setGlobal(lua: *Lua, name: [:0]const u8) void {
         c.lua_setglobal(@as(*LuaState, @ptrCast(lua)), name.ptr);
     }
 
-    /// Does the equivalent to t[`n`] = v where t is the value at the given `index`
-    /// and v is the value on the top of the stack. Pops the value from the stack
+    /// Does the equivalent to `t[n] = v` where `t` is the value at the given `index`
+    /// and `v` is the value on the top of the stack. Pops the value from the stack
+    ///
+    /// As in Lua, this function may trigger a metamethod for the `__newindex` event
+    ///
+    /// Only implemented in Lua 5.3 and 5.4
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_seti
     pub fn setIndex(lua: *Lua, index: i32, n: Integer) void {
         c.lua_seti(@ptrCast(lua), index, n);
@@ -2011,28 +2437,50 @@ pub const Lua = opaque {
 
     /// Pops a table or nil from the stack and sets that value as the new metatable for the
     /// value at the given `index`
+    ///
+    /// * Pops:   `1`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_setmetatable
     pub fn setMetatable(lua: *Lua, index: i32) void {
         // lua_setmetatable always returns 1 so is safe to ignore
         _ = c.lua_setmetatable(@ptrCast(lua), index);
     }
 
-    /// Does the equivalent to t[k] = v, where t is the value at the given `index`
-    /// v is the value on the top of the stack, and k is the value just below the top
+    /// Does the equivalent to `t[k] = v`, where `t` is the value at the given `index`, `v` is the value on the top of the stack, and `k`
+    /// is the value just below the top.
+    ///
+    /// This function pops both the key and the value from the stack. As in Lua, this function may trigger a metamethod for the
+    /// `__newindex` event
+    ///
+    /// * Pops:   `2`
+    /// * Pushes: `0`
+    /// * Errors: `other`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_settable
     pub fn setTable(lua: *Lua, index: i32) void {
         c.lua_settable(@ptrCast(lua), index);
     }
 
-    /// Sets the top of the stack to `index`
-    /// If the new top is greater than the old, new elements are filled with nil
-    /// If `index` is 0 all stack elements are removed
+    /// Accepts any `index`, or 0, and sets the stack top to this `index`. If the new top is greater than the old one, then the new
+    /// elements are filled with nil. If index is 0, then all stack elements are removed.
+    ///
+    /// In Lua 5.4 this function can run arbitrary code when removing an index marked as to-be-closed from the stack.
+    ///
+    /// * Pops:   `?`
+    /// * Pushes: `?`
+    /// * Errors: `never`
+    /// * Errors: `other` (Lua 5.4)
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_settop
     pub fn setTop(lua: *Lua, index: i32) void {
         c.lua_settop(@ptrCast(lua), index);
     }
 
     /// Set userdata tag at the given index
+    ///
+    /// Only available in Luau
     pub fn setUserdataTag(lua: *Lua, index: i32, tag: i32) void {
         std.debug.assert((tag >= 0 and tag < c.LUA_UTAG_LIMIT)); // Luau will do the same assert, this is easier to debug
         c.lua_setuserdatatag(@ptrCast(lua), index, tag);
@@ -2040,12 +2488,24 @@ pub const Lua = opaque {
 
     /// Sets the warning function to be used by Lua to emit warnings
     /// The `data` parameter sets the value `data` passed to the warning function
+    ///
+    /// Only available in Lua 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_setwarnf
     pub fn setWarnF(lua: *Lua, warn_fn: CWarnFn, data: ?*anyopaque) void {
         c.lua_setwarnf(@ptrCast(lua), warn_fn, data);
     }
 
     /// Returns the status of this thread
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_status
     pub fn status(lua: *Lua) Status {
         return @enumFromInt(c.lua_status(@ptrCast(lua)));
@@ -2053,14 +2513,27 @@ pub const Lua = opaque {
 
     /// Converts the zero-terminated string `str` to a number, pushes that number onto the stack,
     /// Returns an error if conversion failed
+    ///
+    /// Only available in Lua 5.3 and 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `1`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_stringtonumber
     pub fn stringToNumber(lua: *Lua, str: [:0]const u8) !void {
         const size = c.lua_stringtonumber(@ptrCast(lua), str.ptr);
         if (size == 0) return error.LuaError;
     }
 
-    /// Converts the Lua value at the given `index` into a boolean
-    /// The Lua value at the index will be considered true unless it is false or nil
+    /// Converts the Lua value at the given index to a Zig boolean value. Like all tests in Lua, `Lua.toBoolean()` returns
+    /// true for any Lua value different from false and nil; otherwise it returns false. (If you want to accept only actual
+    /// boolean values, use `Lua.isBoolean()` to test the value's type.)
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_toboolean
     pub fn toBoolean(lua: *Lua, index: i32) bool {
         return c.lua_toboolean(@ptrCast(lua), index) != 0;
@@ -2068,20 +2541,50 @@ pub const Lua = opaque {
 
     /// Converts a value at the given `index` into a CFn
     /// Returns an error if the value is not a CFn
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_tocfunction
     pub fn toCFunction(lua: *Lua, index: i32) !CFn {
         return c.lua_tocfunction(@ptrCast(lua), index) orelse return error.LuaError;
     }
 
     /// Marks the given index in the stack as a to-be-closed slot
+    ///
+    /// Like a to-be-closed variable in Lua, the value
+    /// at that slot in the stack will be closed when it goes out of scope. Here, in the context of a C function, to go out of
+    /// scope means that the running function returns to Lua, or there is an error, or the slot is removed from the stack
+    /// through `Lua.setTop()` or `Lua.pop()`, or there is a call to `Lua.closeSlot()`. A slot marked as to-be-closed should not be removed
+    /// from the stack by any other function in the API except `Lua.setTop()` or `Lua.pop()`, unless previously deactivated by
+    /// `Lua.closeSlot()`.
+    ///
+    /// This function should not be called for an index that is equal to or below an active to-be-closed slot.
+    ///
+    /// Note that, both in case of errors and of a regular return, by the time the `__close` metamethod runs, the C stack was
+    /// already unwound, so that any automatic C variable declared in the calling function (e.g., a buffer) will be out of
+    /// scope.
+    ///
+    /// Only available in Lua 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `memory`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_toclose
     pub fn toClose(lua: *Lua, index: i32) void {
         c.lua_toclose(@ptrCast(lua), index);
     }
 
     /// Converts the Lua value at the given `index` to a signed integer
-    /// The Lua value must be an integer, or a number, or a string convertible to an integer otherwise toIntegerX returns 0
+    /// The Lua value must be an integer, or a number, or a string convertible to an integer
     /// Returns an error if the conversion failed
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_tointeger'
     pub fn toInteger(lua: *Lua, index: i32) !Integer {
         switch (lang) {
@@ -2100,8 +2603,13 @@ pub const Lua = opaque {
     }
 
     /// Converts the Lua value at the given `index` to a float
-    /// The Lua value must be a number or a string convertible to a number otherwise toNumberX returns 0
+    /// The Lua value must be a number or a string convertible to a number
     /// Returns an error if the conversion failed
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_tonumber
     pub fn toNumber(lua: *Lua, index: i32) !Number {
         switch (lang) {
@@ -2119,16 +2627,38 @@ pub const Lua = opaque {
         }
     }
 
-    /// Converts the value at the given `index` to an opaque pointer
+    /// Converts the value at the given index to a generic pointer (`*anyopaque`) The value can be a userdata, a table, a thread, a
+    /// string, or a function; otherwise, `Lua.toPointer()` returns an error. Different objects will give different pointers. There is
+    /// no way to convert the pointer back to its original value.
+    ///
+    /// Typically this function is used only for hashing and debug information.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_topointer
     pub fn toPointer(lua: *Lua, index: i32) !*const anyopaque {
         if (c.lua_topointer(@ptrCast(lua), index)) |ptr| return ptr;
         return error.LuaError;
     }
 
-    /// Converts the Lua value at the given `index` to a zero-terminated many-itemed-pointer (string)
-    /// Returns an error if the conversion failed
-    /// If the value was a number the actual value in the stack will be changed to a string
+    /// Converts the Lua value at the given index to a slice. The
+    /// Lua value must be a string or a number; otherwise, the function returns an error. If the value is a number, then
+    /// `Lua.toString()` also changes the actual value in the stack to a string. (This change confuses `Lua.next()` when `Lua.toString()`
+    /// is applied to keys during a table traversal.)
+    ///
+    /// `Lua.toString()` returns a pointer to a string inside the Lua state. This string always has a zero (`\0`)
+    /// after its last character (as in C), but can contain other zeros in its body.
+    ///
+    /// Because Lua has garbage collection, there is no guarantee that the pointer returned by `Lua.toString()` will be valid
+    /// after the corresponding Lua value is removed from the stack.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `other` (Lua 5.2)
+    /// * Errors: `memory` (All other versions)
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_tostring
     pub fn toString(lua: *Lua, index: i32) ![:0]const u8 {
         var length: usize = undefined;
@@ -2136,9 +2666,13 @@ pub const Lua = opaque {
         return error.LuaError;
     }
 
-    /// Converts the value at the given `index` to a Lua thread (wrapped with a `Lua` struct)
-    /// The thread does _not_ contain an allocator because it is not the main thread and should therefore not be used with `deinit()`
+    /// Converts the value at the given `index` to a Lua thread.
     /// Returns an error if the value is not a thread
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_tothread
     pub fn toThread(lua: *Lua, index: i32) !*Lua {
         const thread = c.lua_tothread(@ptrCast(lua), index);
@@ -2148,6 +2682,13 @@ pub const Lua = opaque {
 
     /// Converts the Lua value at the given index to an unsigned integer
     /// The Lua value must be a number or a string convertible to a number otherwise an error is returned
+    ///
+    /// Only available in Lua 5.2
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.2/manual.html#lua_tounsignedx
     pub fn toUnsigned(lua: *Lua, index: i32) !Unsigned {
         var success: c_int = undefined;
@@ -2159,6 +2700,11 @@ pub const Lua = opaque {
     /// Returns a Lua-owned userdata pointer of the given type at the given index.
     /// Works for both light and full userdata.
     /// Returns an error if the value is not a userdata.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_touserdata
     pub fn toUserdata(lua: *Lua, comptime T: type, index: i32) !*T {
         if (c.lua_touserdata(@ptrCast(lua), index)) |ptr| return @ptrCast(@alignCast(ptr));
@@ -2167,6 +2713,11 @@ pub const Lua = opaque {
 
     /// Returns a Lua-owned userdata slice of the given type at the given index.
     /// Returns an error if the value is not a userdata.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_touserdata
     pub fn toUserdataSlice(lua: *Lua, comptime T: type, index: i32) ![]T {
         if (c.lua_touserdata(@ptrCast(lua), index)) |ptr| {
@@ -2180,6 +2731,7 @@ pub const Lua = opaque {
         return error.LuaError;
     }
 
+    /// Only available in Luau
     pub fn toUserdataTagged(lua: *Lua, comptime T: type, index: i32, tag: i32) !*T {
         if (c.lua_touserdatatagged(@ptrCast(lua), index, tag)) |ptr| return @ptrCast(@alignCast(ptr));
         return error.LuaError;
@@ -2187,6 +2739,8 @@ pub const Lua = opaque {
 
     /// Converts the Lua value at the given `index` to a 3- or 4-vector.
     /// The Lua value must be a vector.
+    ///
+    /// Only available in Luau
     pub fn toVector(lua: *Lua, index: i32) ![luau_vector_size]f32 {
         const res = c.lua_tovector(@ptrCast(lua), index);
         if (res) |r| {
@@ -2201,6 +2755,8 @@ pub const Lua = opaque {
 
     /// Converts the Lua string at the given `index` to a string atom.
     /// The Lua value must be a string.
+    ///
+    /// Only available in Luau
     pub fn toStringAtom(lua: *Lua, index: i32) !struct { i32, [:0]const u8 } {
         var atom: c_int = undefined;
         if (c.lua_tostringatom(@ptrCast(lua), index, &atom)) |ptr| {
@@ -2211,6 +2767,8 @@ pub const Lua = opaque {
 
     /// Retrieve the user atom index and name for the method being
     /// invoked in a namecall.
+    ///
+    /// Only available in Luau
     pub fn namecallAtom(lua: *Lua) !struct { i32, [:0]const u8 } {
         var atom: c_int = undefined;
         if (c.lua_namecallatom(@ptrCast(lua), &atom)) |ptr| {
@@ -2219,20 +2777,35 @@ pub const Lua = opaque {
         return error.LuaError;
     }
 
-    /// Returns the `LuaType` of the value at the given index
-    /// Note that this is equivalent to lua_type but because type is a Zig primitive it is renamed to `typeOf`
+    /// Returns the `LuaType` of the value at the given index.
+    /// `LuaType.none` is returned for a non-valid but acceptable index.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_type
     pub fn typeOf(lua: *Lua, index: i32) LuaType {
         return @enumFromInt(c.lua_type(@ptrCast(lua), index));
     }
 
     /// Returns the name of the given `LuaType` as a null-terminated slice
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_typename
     pub fn typeName(lua: *Lua, t: LuaType) [:0]const u8 {
         return std.mem.span(c.lua_typename(@ptrCast(lua), @intFromEnum(t)));
     }
 
     /// Returns the pseudo-index that represents the `i`th upvalue of the running function
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_upvalueindex
     pub fn upvalueIndex(i: i32) i32 {
         return c.lua_upvalueindex(i);
@@ -2252,19 +2825,42 @@ pub const Lua = opaque {
         return c.lua_version(@ptrCast(lua));
     }
 
+    /// Lua 5.2 and 5.3: Returns the address of the version number stored in the Lua core. When `caller_version` is false, returns the
+    /// address of the version used to create that state. When `caller_version` is true, returns the address of the version running the call.
+    ///
+    /// Lua 5.4: Returns the version number of this core.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
+    /// See https://www.lua.org/manual/5.4/manual.html#lua_version
     pub const version = switch (lang) {
         .lua54, .skynetlua => version54,
         else => version52,
     };
 
-    /// Emits a warning with the given `msg`
-    /// A message with `to_cont` as true should be continued in a subsequent call to the function
+    /// Emits a warning with the given `message`
+    /// A message with `to_cont` as true should be continued in a subsequent call to the function.
+    ///
+    /// Only available in Lua 5.4
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_warning
-    pub fn warning(lua: *Lua, msg: [:0]const u8, to_cont: bool) void {
-        c.lua_warning(@ptrCast(lua), msg.ptr, @intFromBool(to_cont));
+    pub fn warning(lua: *Lua, message: [:0]const u8, to_cont: bool) void {
+        c.lua_warning(@ptrCast(lua), message.ptr, @intFromBool(to_cont));
     }
 
-    /// Pops `num` values from the current stack and pushes onto the stack of `to`
+    /// Exchange values between different threads of the same state.
+    /// This function pops `n` values from the current stack, and pushes them onto the stack of `to`.
+    ///
+    /// * Pops:   `?`
+    /// * Pushes: `?`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_xmove
     pub fn xMove(lua: *Lua, to: *Lua, num: i32) void {
         c.lua_xmove(@ptrCast(lua), @ptrCast(to), num);
@@ -2310,18 +2906,33 @@ pub const Lua = opaque {
     // Each is kept similar to the original C API function while also making it easy to use from Zig
 
     /// Returns the current hook function
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gethook
     pub fn getHook(lua: *Lua) ?CHookFn {
         return c.lua_gethook(@ptrCast(lua));
     }
 
     /// Returns the current hook count
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gethookcount
     pub fn getHookCount(lua: *Lua) i32 {
         return c.lua_gethookcount(@ptrCast(lua));
     }
 
     /// Returns the current hook mask
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_gethookmask
     pub fn getHookMask(lua: *Lua) HookMask {
         return HookMask.fromInt(c.lua_gethookmask(@ptrCast(lua)));
@@ -2414,8 +3025,11 @@ pub const Lua = opaque {
     }
 
     /// Gets information about a specific function or function invocation
-    /// Returns an error if an invalid option was given, but the valid options
-    /// are still handled
+    ///
+    /// * Pops:   `(0|1)`
+    /// * Pushes: `(0|1|2)`
+    /// * Errors: `memory`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getinfo
     pub const getInfo = if (lang == .luau) getInfoLuau else getInfoLua;
 
@@ -2440,12 +3054,38 @@ pub const Lua = opaque {
         return error.LuaError;
     }
 
-    /// Gets information about a local variable
-    /// Returns the name of the local variable
+    /// Gets information about a local variable or a temporary value of a given activation record or a given function.
+    ///
+    /// In the first case, the parameter ar must be a valid activation record that was filled by a previous call to
+    /// `Lua.getStack()` or given as argument to a hook. The index n selects which local variable to inspect; see
+    /// debug.getlocal for details about variable indices and names.
+    ///
+    /// `Lua.getLocal()` pushes the variable's value onto the stack and returns its name.
+    ///
+    /// In the second case, ar must be NULL and the function to be inspected must be on the top of the stack. In this case,
+    /// only parameters of Lua functions are visible (as there is no information about what variables are active) and no values
+    /// are pushed onto the stack.
+    ///
+    /// Returns an error (and pushes nothing) when the index is greater than the number of active local variables.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `(0|1)`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getlocal
     pub const getLocal = if (lang == .luau) getLocalLuau else getLocalLua;
 
-    /// Gets information about the interpreter runtime stack
+    /// Gets information about the interpreter runtime stack.
+    ///
+    /// This function returns a `DebugInfo` structure with an identification of the activation record of the function
+    /// executing at a given level. Level `0` is the current running function, whereas level `n+1` is the function that has called
+    /// level `n` (except for tail calls, which do not count in the stack). When called with a level greater than the stack
+    /// depth, `Lua.getStack()` returns an error.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getstack
     pub fn getStack(lua: *Lua, level: i32) !DebugInfo {
         var ar: Debug = undefined;
@@ -2458,7 +3098,14 @@ pub const Lua = opaque {
         };
     }
 
-    /// Gets information about the `n`th upvalue of the closure at index `func_index`
+    /// Gets information about the `n`-th upvalue of the closure at index `func_index`. It pushes the upvalue's value onto the stack
+    /// and returns its name. Returns an error (and pushes nothing) when the index `n` is greater than the number of upvalues.
+    /// See debug.getupvalue for more information about upvalues.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `(0|1)`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_getupvalue
     pub fn getUpvalue(lua: *Lua, func_index: i32, n: i32) ![:0]const u8 {
         if (c.lua_getupvalue(@ptrCast(lua), func_index, n)) |name| {
@@ -2467,12 +3114,35 @@ pub const Lua = opaque {
         return error.LuaError;
     }
 
-    /// Sets the debugging hook function
+    /// Sets the debugging hook function.
+    ///
+    /// * Argument `f` is the hook function
+    /// * `mask` specifies on which events the hook will be called.
+    /// * The count argument is only meaningful when the mask includes `count`
+    ///
+    /// For each event, the hook is called as explained below:
+    /// * The call hook: is called when the interpreter calls a function. The hook is called just after Lua enters the new
+    /// function.
+    /// * The return hook: is called when the interpreter returns from a function. The hook is called just before Lua
+    /// leaves the function.
+    /// * The line hook: is called when the interpreter is about to start the execution of a new line of
+    /// code, or when it jumps back in the code (even to the same line). This event only happens while Lua is executing a Lua
+    /// function.
+    /// * The count hook: is called after the interpreter executes every count instructions. This event only happens
+    /// while Lua is executing a Lua function.
+    ///
+    /// Hooks are disabled by setting mask to zero.
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_sethook
-    pub fn setHook(lua: *Lua, hook_fn: CHookFn, mask: HookMask, count: i32) void {
+    /// TODO: allow setting mask to null to set to zero?
+    pub fn setHook(lua: *Lua, f: CHookFn, mask: HookMask, count: i32) void {
         const hook_mask = HookMask.toInt(mask);
         // Lua 5.1 and 5.2 always return 1. Other versions return void
-        _ = c.lua_sethook(@ptrCast(lua), hook_fn, hook_mask, count);
+        _ = c.lua_sethook(@ptrCast(lua), f, hook_mask, count);
     }
 
     fn setLocalLua(lua: *Lua, info: *DebugInfo, n: i32) ![:0]const u8 {
@@ -2496,14 +3166,29 @@ pub const Lua = opaque {
         return error.LuaError;
     }
 
-    /// Sets the value of a local variable
-    /// Returns an error when the index is greater than the number of active locals
-    /// Returns the name of the local variable
+    /// Sets the value of a local variable of a given activation record. It assigns the value on the top of the stack to the
+    /// variable and returns its name. It also pops the value from the stack.
+    ///
+    /// Returns an error (and pops nothing) when the index is greater than the number of active local variables.
+    /// Parameters `ar` and `n` are as in the function `Lua.getLocal()`.
+    ///
+    /// * Pops:   `(0|1)`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_setlocal
     pub const setLocal = if (lang == .luau) setLocalLuau else setLocalLua;
 
-    /// Sets the value of a closure's upvalue
-    /// Returns the name of the upvalue or an error if the upvalue does not exist
+    /// Sets the value of a closure's upvalue. It assigns the value on the top of the stack to the upvalue and returns its
+    /// name. It also pops the value from the stack.
+    /// Returns an error (and pops nothing) when the index `n` is greater than the number of upvalues.
+    ///
+    /// Parameters `func_index` and `n` are as in the function lua_getupvalue.
+    ///
+    /// * Pops:   `(0|1)`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_setupvalue
     pub fn setUpvalue(lua: *Lua, func_index: i32, n: i32) ![:0]const u8 {
         if (c.lua_setupvalue(@ptrCast(lua), func_index, n)) |name| {
@@ -2512,27 +3197,48 @@ pub const Lua = opaque {
         return error.LuaError;
     }
 
+    /// Only available in Luau
     pub fn setInterruptCallbackFn(lua: *Lua, cb: ?CInterruptCallbackFn) void {
         if (c.lua_callbacks(@ptrCast(lua))) |cb_struct| {
             cb_struct.*.interrupt = cb;
         }
     }
 
+    /// Only available in Luau
     pub fn setUserAtomCallbackFn(lua: *Lua, cb: CUserAtomCallbackFn) void {
         if (c.lua_callbacks(@ptrCast(lua))) |cb_struct| {
             cb_struct.*.useratom = cb;
         }
     }
 
-    /// Returns a unique identifier for the upvalue numbered `n` from the closure index `func_index`
+    /// Returns a unique identifier for the upvalue numbered `n` from the closure at index funcindex.
+    ///
+    /// These unique identifiers allow a program to check whether different closures share upvalues. Lua closures that share an
+    /// upvalue (that is, that access a same external local variable) will return identical ids for those upvalue indices.
+    ///
+    /// Parameters `func_index` and `n` are as in the function `Lua.getUpvalue()`, but `n` cannot be greater than the number of upvalues.
+    ///
+    /// Not implemented in Lua 5.1, LuaJIT or Luau
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_upvalueid
     pub fn upvalueId(lua: *Lua, func_index: i32, n: i32) !*anyopaque {
         if (c.lua_upvalueid(@ptrCast(lua), func_index, n)) |ptr| return ptr;
         return error.LuaError;
     }
 
-    /// Make the `n1`th upvalue of the Lua closure at index `func_index1` refer to the `n2`th upvalue
-    /// of the Lua closure at index `func_index2`
+    /// Make the `n1`-th upvalue of the Lua closure at index `func_index1` refer to the `n2`-th upvalue of the Lua closure at index
+    /// `func_index2`.
+    ///
+    /// Not implemented in Lua 5.1, LuaJIT or Luau
+    ///
+    /// * Pops:   `0`
+    /// * Pushes: `0`
+    /// * Errors: `never`
+    ///
     /// See https://www.lua.org/manual/5.4/manual.html#lua_upvaluejoin
     pub fn upvalueJoin(lua: *Lua, func_index1: i32, n1: i32, func_index2: i32, n2: i32) void {
         c.lua_upvaluejoin(@ptrCast(lua), func_index1, n1, func_index2, n2);
@@ -2702,7 +3408,7 @@ pub const Lua = opaque {
             .luajit, .lua51 => try lua.loadFile(file_name),
             else => try lua.loadFile(file_name, .binary_text),
         }
-        try lua.protectedCall(0, mult_return, 0);
+        try lua.protectedCall(.{ .results = mult_return });
     }
 
     /// Loads and runs the given string
@@ -2710,7 +3416,7 @@ pub const Lua = opaque {
     pub fn doString(lua: *Lua, str: [:0]const u8) !void {
         // trnaslate-c failure
         try lua.loadString(str);
-        try lua.protectedCall(0, mult_return, 0);
+        try lua.protectedCall(.{ .results = mult_return });
     }
 
     /// Raises an error
@@ -3008,7 +3714,7 @@ pub const Lua = opaque {
             .lua51, .luajit, .luau => {
                 lua.pushFunction(open_fn);
                 _ = lua.pushStringZ(mod_name);
-                lua.call(1, 0);
+                lua.call(.{ .args = 1 });
             },
             else => c.luaL_requiref(@ptrCast(lua), mod_name.ptr, open_fn, @intFromBool(global)),
         }
@@ -3359,7 +4065,7 @@ pub const Lua = opaque {
                     if (lua.getMetaField(-1, "__index")) |_| {
                         lua.pushValue(-2);
                         lua.pushInteger(@intCast(i + 1));
-                        lua.call(2, 1);
+                        lua.call(.{ .args = 1, .results = 1 });
                     } else |_| {
                         _ = lua.rawGetIndex(-1, @intCast(i + 1));
                     }
@@ -3522,7 +4228,7 @@ pub const Lua = opaque {
         }
 
         const num_results = if (ReturnType == void) 0 else 1;
-        try lua.protectedCall(args.len, num_results, 0);
+        try lua.protectedCall(.{ .args = args.len, .results = num_results });
     }
 
     ///automatically calls a lua function with the given arguments
