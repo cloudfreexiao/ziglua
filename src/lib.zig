@@ -779,13 +779,13 @@ pub const Lua = opaque {
         /// Context value passed to the continuation function
         ctx: switch (lang) {
             .lua52 => i32,
-            .lua53, .lua54 => Context,
+            .lua53, .lua54, .skynetlua => Context,
             else => void,
         },
         /// The continuation function
         k: switch (lang) {
             .lua52 => CFn,
-            .lua53, .lua54 => CContFn,
+            .lua53, .lua54, .skynetlua => CContFn,
             else => void,
         },
     };
